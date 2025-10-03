@@ -83,6 +83,8 @@ type Enricher struct {
 	cacheDir     string
 	rateInterval time.Duration
 	lastRequest  time.Time
+	disableOSV   bool
+	disableNVD   bool
 }
 
 // NewEnricher builds an Enricher. When logger is nil log output is discarded.
@@ -373,7 +375,7 @@ func dedupeReferences(c *CVE) {
 }
 
 func (e *Enricher) onlineEnabled() bool {
-	return e.opts.OSV.Enabled || e.opts.NVD.Enabled
+	return (e.opts.OSV.Enabled && !e.disableOSV) || (e.opts.NVD.Enabled && !e.disableNVD)
 }
 
 func (e *Enricher) lookupOnline(ctx context.Context, hash string) ([]CVE, error) {
@@ -382,18 +384,26 @@ func (e *Enricher) lookupOnline(ctx context.Context, hash string) ([]CVE, error)
 	}
 	var combined []CVE
 	var errs []string
-	if e.opts.OSV.Enabled {
+	if e.opts.OSV.Enabled && !e.disableOSV {
 		cves, err := e.queryOSV(ctx, hash)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("osv: %v", err))
+			if e.disableOnPermanentError("osv", err) {
+				errs = append(errs, fmt.Sprintf("osv disabled: %v", err))
+			} else {
+				errs = append(errs, fmt.Sprintf("osv: %v", err))
+			}
 		} else if len(cves) > 0 {
 			combined = mergeCVEs(combined, cves)
 		}
 	}
-	if e.opts.NVD.Enabled {
+	if e.opts.NVD.Enabled && !e.disableNVD {
 		cves, err := e.queryNVD(ctx, hash)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("nvd: %v", err))
+			if e.disableOnPermanentError("nvd", err) {
+				errs = append(errs, fmt.Sprintf("nvd disabled: %v", err))
+			} else {
+				errs = append(errs, fmt.Sprintf("nvd: %v", err))
+			}
 		} else if len(cves) > 0 {
 			combined = mergeCVEs(combined, cves)
 		}
@@ -483,7 +493,7 @@ func (e *Enricher) queryOSV(ctx context.Context, hash string) ([]CVE, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("http %s", resp.Status)
+		return nil, &providerError{provider: "osv", status: resp.StatusCode, message: fmt.Sprintf("http %s", resp.Status)}
 	}
 	var parsed struct {
 		Vulns []struct {
@@ -546,7 +556,7 @@ func (e *Enricher) queryNVD(ctx context.Context, hash string) ([]CVE, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("http %s", resp.Status)
+		return nil, &providerError{provider: "nvd", status: resp.StatusCode, message: fmt.Sprintf("http %s", resp.Status)}
 	}
 	var parsed struct {
 		Vulnerabilities []struct {
@@ -599,6 +609,54 @@ func (e *Enricher) queryNVD(ctx context.Context, hash string) ([]CVE, error) {
 		out = append(out, cve)
 	}
 	return out, nil
+}
+
+type providerError struct {
+	provider string
+	status   int
+	message  string
+}
+
+func (e *providerError) Error() string {
+	return e.message
+}
+
+func (e *providerError) Permanent() bool {
+	if e.status == http.StatusTooManyRequests {
+		return false
+	}
+	return e.status >= 400 && e.status < 500
+}
+
+func (e *providerError) Provider() string {
+	return e.provider
+}
+
+func (en *Enricher) disableOnPermanentError(provider string, err error) bool {
+	var perr *providerError
+	if !errors.As(err, &perr) || !perr.Permanent() {
+		return false
+	}
+	en.disableProvider(provider, perr)
+	return true
+}
+
+func (en *Enricher) disableProvider(provider string, err *providerError) {
+	switch provider {
+	case "osv":
+		if en.disableOSV {
+			return
+		}
+		en.disableOSV = true
+	case "nvd":
+		if en.disableNVD {
+			return
+		}
+		en.disableNVD = true
+	default:
+		return
+	}
+	en.logger.Printf("disable %s lookups after %s", provider, err.message)
 }
 
 func pickOSVSeverity(entries []struct {

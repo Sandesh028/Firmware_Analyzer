@@ -207,3 +207,46 @@ func TestVulnerabilityOnlineLookupCachesResults(t *testing.T) {
 		t.Fatalf("expected cached result without extra HTTP calls, got %d", requests)
 	}
 }
+
+func TestVulnerabilityOnlineLookupDisablesAfterPermanentError(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	binOne := filepath.Join(tmp, "one.bin")
+	if err := os.WriteFile(binOne, []byte("one"), 0o644); err != nil {
+		t.Fatalf("write one: %v", err)
+	}
+	binTwo := filepath.Join(tmp, "two.bin")
+	if err := os.WriteFile(binTwo, []byte("two"), 0o644); err != nil {
+		t.Fatalf("write two: %v", err)
+	}
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	opts := vuln.Options{
+		DisableEmbedded: true,
+		OSV:             vuln.OnlineOptions{Enabled: true, Endpoint: server.URL},
+		HTTPClient:      server.Client(),
+	}
+	enricher := vuln.NewEnricher(nil, opts)
+	binaries := []binaryinspector.Result{{Path: binOne}, {Path: binTwo}}
+
+	if _, err := enricher.Enrich(context.Background(), binaries); err != nil {
+		t.Fatalf("enrich: %v", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("expected one request before disabling, got %d", got)
+	}
+
+	if _, err := enricher.Enrich(context.Background(), binaries); err != nil {
+		t.Fatalf("enrich second run: %v", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("expected online provider to remain disabled, got %d requests", got)
+	}
+}

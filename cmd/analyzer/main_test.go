@@ -54,6 +54,15 @@ func TestSnapshotRunCreatesSnapshotDirectory(t *testing.T) {
 		}
 	}
 
+	workspace := filepath.Join(reportDir, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	extraFile := filepath.Join(workspace, "data.bin")
+	if err := os.WriteFile(extraFile, []byte("bin"), 0o644); err != nil {
+		t.Fatalf("write extra file: %v", err)
+	}
+
 	logger := log.New(io.Discard, "", 0)
 	if err := snapshotRun(logger, "firmware.bin", reportDir, reportPaths, nil, nil, diffPaths); err != nil {
 		t.Fatalf("snapshot run: %v", err)
@@ -64,10 +73,16 @@ func TestSnapshotRunCreatesSnapshotDirectory(t *testing.T) {
 		t.Fatalf("snapshot directory missing: %v", err)
 	}
 
-	expected := []string{"report.md", "report.html", "report.json", "diff.md", "diff.json", "README.txt"}
+	expected := []string{"report.md", "report.html", "report.json", "diff.md", "diff.json", "README.txt", filepath.Join("workspace", "data.bin")}
 	for _, name := range expected {
 		if _, err := os.Stat(filepath.Join(snapshotDir, name)); err != nil {
 			t.Fatalf("expected artefact %s: %v", name, err)
+		}
+	}
+
+	for _, p := range []string{reportPaths.Markdown, reportPaths.HTML, reportPaths.JSON, diffPaths.Markdown, diffPaths.JSON} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be moved from report directory", p)
 		}
 	}
 }

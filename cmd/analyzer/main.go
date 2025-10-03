@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -395,9 +396,13 @@ func snapshotRun(logger *log.Logger, firmwarePath, reportDir string, reportPaths
 
 	artefacts := collectArtefacts(reportPaths, sbomPaths, sbomSignatures, diffPaths)
 	for _, path := range artefacts {
-		if err := copyArtefact(path, snapshotDir); err != nil {
-			logger.Printf("snapshot copy %s: %v", path, err)
+		if err := transferArtefact(path, snapshotDir); err != nil {
+			logger.Printf("snapshot move %s: %v", path, err)
 		}
+	}
+
+	if err := mirrorReportDirectory(reportDir, snapshotDir, artefacts); err != nil {
+		logger.Printf("snapshot mirror %s: %v", reportDir, err)
 	}
 
 	if err := writeSnapshotMetadata(snapshotDir, firmwarePath, reportDir); err != nil {
@@ -405,52 +410,6 @@ func snapshotRun(logger *log.Logger, firmwarePath, reportDir string, reportPaths
 	}
 	logger.Printf("snapshot written %s", snapshotDir)
 	return nil
-}
-
-func collectArtefacts(reportPaths report.Paths, sbomPaths, sbomSignatures []string, diffPaths *diff.Paths) []string {
-	var paths []string
-	add := func(p string) {
-		if strings.TrimSpace(p) != "" {
-			paths = append(paths, p)
-		}
-	}
-	add(reportPaths.Markdown)
-	add(reportPaths.HTML)
-	add(reportPaths.JSON)
-	for _, p := range sbomPaths {
-		add(p)
-	}
-	for _, p := range sbomSignatures {
-		add(p)
-	}
-	if diffPaths != nil {
-		add(diffPaths.Markdown)
-		add(diffPaths.JSON)
-	}
-	return uniqueStrings(paths)
-}
-
-func copyArtefact(src, dstDir string) error {
-	if src == "" {
-		return nil
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	outPath := filepath.Join(dstDir, filepath.Base(src))
-	out, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Sync()
 }
 
 func writeSnapshotMetadata(dir, firmwarePath, reportDir string) error {
@@ -491,7 +450,123 @@ func sanitizeName(name string) string {
 	return cleaned
 }
 
-func uniqueStrings(values []string) []string {
+func collectArtefacts(reportPaths report.Paths, sbomPaths, sbomSignatures []string, diffPaths *diff.Paths) []string {
+	var paths []string
+	add := func(p string) {
+		if strings.TrimSpace(p) != "" {
+			paths = append(paths, p)
+		}
+	}
+	add(reportPaths.Markdown)
+	add(reportPaths.HTML)
+	add(reportPaths.JSON)
+	for _, p := range sbomPaths {
+		add(p)
+	}
+	for _, p := range sbomSignatures {
+		add(p)
+	}
+	if diffPaths != nil {
+		add(diffPaths.Markdown)
+		add(diffPaths.JSON)
+	}
+	return dedupeStrings(paths)
+}
+
+func transferArtefact(src, dstDir string) error {
+	if strings.TrimSpace(src) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return err
+	}
+	dst := filepath.Join(dstDir, filepath.Base(src))
+	if err := os.Rename(src, dst); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if copyErr := copyFile(src, dst); copyErr != nil {
+			return copyErr
+		}
+		if removeErr := os.Remove(src); removeErr != nil && !os.IsNotExist(removeErr) {
+			return removeErr
+		}
+	}
+	return nil
+}
+
+func mirrorReportDirectory(reportDir, snapshotDir string, artefacts []string) error {
+	reportDir = strings.TrimSpace(reportDir)
+	if reportDir == "" {
+		return nil
+	}
+	info, err := os.Stat(reportDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	skip := make(map[string]struct{}, len(artefacts))
+	for _, a := range artefacts {
+		if a == "" {
+			continue
+		}
+		skip[filepath.Clean(a)] = struct{}{}
+	}
+	return filepath.WalkDir(reportDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == reportDir {
+			return nil
+		}
+		if _, ok := skip[filepath.Clean(path)]; ok {
+			return nil
+		}
+		rel, err := filepath.Rel(reportDir, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(snapshotDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return copyFile(path, target)
+	})
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
+func dedupeStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	var result []string
 	for _, v := range values {
