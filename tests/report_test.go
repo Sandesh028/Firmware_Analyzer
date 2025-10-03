@@ -49,6 +49,9 @@ func TestReportMarkdownContainsSections(t *testing.T) {
 	if !strings.Contains(md, "# Drone Firmware Analyzer Report") {
 		t.Fatalf("missing heading: %s", md)
 	}
+	if !strings.Contains(md, "## Analysis Overview") {
+		t.Fatalf("missing overview section: %s", md)
+	}
 	if !strings.Contains(md, "Compression") {
 		t.Fatalf("expected compression column: %s", md)
 	}
