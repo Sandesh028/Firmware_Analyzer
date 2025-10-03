@@ -85,7 +85,8 @@ created alongside the extracted firmware.
 - `--report-formats` – comma separated list selecting `markdown`, `html`, and/or
   `json` outputs.
 - `--vuln-db` – comma separated list of offline CVE database files. Each file
-  should map SHA-256 hashes to CVE arrays.
+  should map SHA-256 hashes to CVE arrays. When omitted the analyzer falls back
+  to the curated database bundled at build time.
 - `--sbom-format` – choose `spdx`, `cyclonedx`, or `none` to control SBOM
   emission.
 - `--plugin-dir` – directory containing executable plugins. Plugins receive the
@@ -112,6 +113,19 @@ created alongside the extracted firmware.
   ```bash
   go run ./cmd/analyzer --fw tests/fixtures/sample.bin --report-formats markdown
   ```
+
+### Curated vulnerability database
+
+- A maintained baseline is shipped in `pkg/vuln/data/curated.json` and embedded into
+  the analyzer binary so vulnerability lookups work out of the box.
+- Refresh the curated feed at release time by merging upstream sources with the
+  helper CLI:
+
+  ```bash
+  go run ./cmd/vulndbupdate --source feeds/openwrt.json --source feeds/vendor.json --out pkg/vuln/data/curated.json
+  ```
+
+- To fetch feeds over plain HTTP, add `--insecure-http` explicitly.
 
 ## Development
 

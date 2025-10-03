@@ -5,8 +5,8 @@ triage. The following milestones track planned enhancements:
 
 ## Short Term
 
-- Ship a curated vulnerability database bundle and tooling to update it
-  alongside releases.
+- ✅ Ship a curated vulnerability database bundle and tooling to update it
+  alongside releases (`pkg/vuln/data/curated.json` + `cmd/vulndbupdate`).
 - Capture richer filesystem metadata (e.g. partition offsets and compression
   statistics) for SBOM annotations.
 - Extend plugin execution with structured input (workspace metadata) and
