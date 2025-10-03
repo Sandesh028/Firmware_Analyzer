@@ -87,6 +87,23 @@ func TestVulnerabilityEnrichmentUsesEmbeddedDatabase(t *testing.T) {
 	}
 }
 
+func TestVulnerabilityEnrichmentSkipsMissingDatabase(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	binPath := filepath.Join(tmp, "firmware.bin")
+	if err := os.WriteFile(binPath, []byte("firmware"), 0o644); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+
+	missing := filepath.Join(tmp, "missing.json")
+	opts := vuln.Options{DatabasePaths: []string{missing}, DisableEmbedded: true}
+	enricher := vuln.NewEnricher(nil, opts)
+	if _, err := enricher.Enrich(context.Background(), []binaryinspector.Result{{Path: binPath}}); err != nil {
+		t.Fatalf("enrich should skip missing database: %v", err)
+	}
+}
+
 func TestMergeNormalisesAndDeduplicates(t *testing.T) {
 	t.Parallel()
 

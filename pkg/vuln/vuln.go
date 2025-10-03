@@ -177,15 +177,24 @@ func (e *Enricher) loadDatabases() (map[string][]CVE, error) {
 		path = filepath.Clean(path)
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read database %s: %w", path, err)
+			if os.IsNotExist(err) {
+				e.logger.Printf("skip vulnerability database %s: %v", path, err)
+				continue
+			}
+			e.logger.Printf("skip vulnerability database %s: %v", path, err)
+			continue
 		}
 		entries, err := ParseDatabase(data)
 		if err != nil {
-			return nil, fmt.Errorf("parse database %s: %w", path, err)
+			e.logger.Printf("skip vulnerability database %s: %v", path, err)
+			continue
 		}
 		sources = append(sources, entries)
 	}
 
+	if len(sources) == 0 && (e.opts.DisableEmbedded || len(embeddedCuratedDatabase) == 0) {
+		return make(map[string][]CVE), nil
+	}
 	return Merge(sources...), nil
 }
 

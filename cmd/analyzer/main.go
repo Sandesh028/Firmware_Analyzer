@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -267,6 +268,10 @@ func main() {
 		}
 	}
 
+	if err := snapshotRun(logger, *firmwarePath, outDir, paths, summary.SBOMPaths, summary.SBOMSignatures, diffPaths); err != nil {
+		logger.Printf("snapshot error: %v", err)
+	}
+
 	logger.Printf("analysis complete in %s", duration.Round(time.Millisecond))
 }
 
@@ -371,4 +376,130 @@ func parseDiffFormats(value string) (diff.Formats, error) {
 		return diff.Formats{}, fmt.Errorf("no diff formats selected")
 	}
 	return formats, nil
+}
+
+func snapshotRun(logger *log.Logger, firmwarePath, reportDir string, reportPaths report.Paths, sbomPaths, sbomSignatures []string, diffPaths *diff.Paths) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("determine working directory: %w", err)
+	}
+	name := sanitizeName(filepath.Base(firmwarePath))
+	if name == "" {
+		name = "firmware"
+	}
+	target := filepath.Join(cwd, fmt.Sprintf("FA_%s", name))
+	snapshotDir, err := ensureUniqueDir(target)
+	if err != nil {
+		return fmt.Errorf("prepare snapshot directory: %w", err)
+	}
+
+	artefacts := collectArtefacts(reportPaths, sbomPaths, sbomSignatures, diffPaths)
+	for _, path := range artefacts {
+		if err := copyArtefact(path, snapshotDir); err != nil {
+			logger.Printf("snapshot copy %s: %v", path, err)
+		}
+	}
+
+	if err := writeSnapshotMetadata(snapshotDir, firmwarePath, reportDir); err != nil {
+		return err
+	}
+	logger.Printf("snapshot written %s", snapshotDir)
+	return nil
+}
+
+func collectArtefacts(reportPaths report.Paths, sbomPaths, sbomSignatures []string, diffPaths *diff.Paths) []string {
+	var paths []string
+	add := func(p string) {
+		if strings.TrimSpace(p) != "" {
+			paths = append(paths, p)
+		}
+	}
+	add(reportPaths.Markdown)
+	add(reportPaths.HTML)
+	add(reportPaths.JSON)
+	for _, p := range sbomPaths {
+		add(p)
+	}
+	for _, p := range sbomSignatures {
+		add(p)
+	}
+	if diffPaths != nil {
+		add(diffPaths.Markdown)
+		add(diffPaths.JSON)
+	}
+	return uniqueStrings(paths)
+}
+
+func copyArtefact(src, dstDir string) error {
+	if src == "" {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	outPath := filepath.Join(dstDir, filepath.Base(src))
+	out, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
+func writeSnapshotMetadata(dir, firmwarePath, reportDir string) error {
+	metadata := fmt.Sprintf("Firmware: %s\nReports directory: %s\nSnapshot created: %s\n", firmwarePath, reportDir, time.Now().Format(time.RFC3339))
+	return os.WriteFile(filepath.Join(dir, "README.txt"), []byte(metadata), 0o644)
+}
+
+func ensureUniqueDir(base string) (string, error) {
+	candidate := base
+	if info, err := os.Stat(candidate); err == nil {
+		if !info.IsDir() {
+			return "", fmt.Errorf("path %s exists and is not a directory", candidate)
+		}
+		for idx := 1; ; idx++ {
+			next := fmt.Sprintf("%s_%d", base, idx)
+			if _, err := os.Stat(next); os.IsNotExist(err) {
+				candidate = next
+				break
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.MkdirAll(candidate, 0o755); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
+func sanitizeName(name string) string {
+	cleaned := strings.TrimSpace(name)
+	if cleaned == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(" ", "_", "/", "_", "\\", "_")
+	cleaned = replacer.Replace(cleaned)
+	cleaned = strings.ReplaceAll(cleaned, "..", "_")
+	return cleaned
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	var result []string
+	for _, v := range values {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		result = append(result, v)
+	}
+	return result
 }

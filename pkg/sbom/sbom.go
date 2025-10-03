@@ -2,6 +2,7 @@ package sbom
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -72,9 +73,14 @@ func NewGenerator(logger *log.Logger, opts Options) (*Generator, error) {
 	if opts.SigningKeyPath != "" {
 		signer, err := newEd25519Signer(opts.SigningKeyPath)
 		if err != nil {
-			return nil, err
+			if errors.Is(err, os.ErrNotExist) {
+				logger.Printf("sbom signing disabled: %v", err)
+			} else {
+				return nil, err
+			}
+		} else {
+			return &Generator{logger: logger, opts: opts, signer: signer}, nil
 		}
-		return &Generator{logger: logger, opts: opts, signer: signer}, nil
 	}
 	return &Generator{logger: logger, opts: opts}, nil
 }

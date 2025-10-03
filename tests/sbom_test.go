@@ -126,3 +126,15 @@ func TestSBOMEncodeTagValueAndSigning(t *testing.T) {
 		t.Fatalf("expected tag-value content")
 	}
 }
+
+func TestSBOMGeneratorWarnsOnMissingKey(t *testing.T) {
+	t.Parallel()
+
+	gen, err := sbom.NewGenerator(nil, sbom.Options{Formats: []sbom.Format{sbom.FormatSPDXJSON}, SigningKeyPath: "missing-key.pem"})
+	if err != nil {
+		t.Fatalf("expected missing key to be ignored: %v", err)
+	}
+	if gen.Signer() {
+		t.Fatalf("expected signer to be disabled when key is missing")
+	}
+}
