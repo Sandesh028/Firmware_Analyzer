@@ -1,0 +1,43 @@
+{
+  "generated": "2024-05-30T00:00:00Z",
+  "sources": [
+    "Firmware Analyzer curated baseline"
+  ],
+  "artifacts": [
+    {
+      "sha256": "c3bf47ea1f4a4a605470313cacb3a44f4a461f68c6faeab07e737610cb5ac835",
+      "cves": [
+        {
+          "id": "CVE-2024-0001",
+          "severity": "high",
+          "description": "Sample vulnerability affecting legacy BusyBox telnetd builds shipped with drone firmware images.",
+          "references": [
+            "https://example.com/cves/CVE-2024-0001"
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "de4f03b7c2a7f1f77bfabf9ccb6f096d34f66bb594d27ad4ffdd43bccd4c6bd0",
+      "cves": [
+        {
+          "id": "CVE-2023-3157",
+          "severity": "critical",
+          "description": "Illustrative RCE in proprietary drone control daemons observed in reference samples.",
+          "references": [
+            "https://example.com/cves/CVE-2023-3157",
+            "https://nvd.nist.gov/vuln/detail/CVE-2023-3157"
+          ]
+        },
+        {
+          "id": "CVE-2020-10135",
+          "severity": "medium",
+          "description": "Bluetooth KNOB attack impacting embedded stacks reused across UAVs.",
+          "references": [
+            "https://nvd.nist.gov/vuln/detail/CVE-2020-10135"
+          ]
+        }
+      ]
+    }
+  ]
+}
