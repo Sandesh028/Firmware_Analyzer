@@ -8,14 +8,18 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"firmwareanalyzer/pkg/binaryinspector"
 	"firmwareanalyzer/pkg/configparser"
 	"firmwareanalyzer/pkg/extractor"
 	"firmwareanalyzer/pkg/filesystem"
+	"firmwareanalyzer/pkg/plugin"
+	"firmwareanalyzer/pkg/sbom"
 	"firmwareanalyzer/pkg/secrets"
 	"firmwareanalyzer/pkg/service"
+	"firmwareanalyzer/pkg/vuln"
 )
 
 // Summary aggregates analysis results for rendering.
@@ -27,6 +31,10 @@ type Summary struct {
 	Services    []service.Service
 	Secrets     []secrets.Finding
 	Binaries    []binaryinspector.Result
+	Vulnerable  []vuln.Finding
+	SBOM        *sbom.Document
+	SBOMPath    string
+	Plugins     []plugin.Result
 }
 
 // Generator renders Markdown and HTML reports.
@@ -128,6 +136,83 @@ func (g *Generator) Markdown(summary Summary) string {
 		builder.WriteString("## Binary Protections\n")
 		builder.WriteString(binaryinspector.CollectMarkdownTable(summary.Binaries))
 		builder.WriteString("\n")
+	}
+
+	if len(summary.Vulnerable) > 0 {
+		builder.WriteString("## Vulnerabilities\n")
+		builder.WriteString("| Path | Hash | CVEs | Error |\n")
+		builder.WriteString("| --- | --- | --- | --- |\n")
+		for _, vul := range summary.Vulnerable {
+			ids := "-"
+			if len(vul.CVEs) > 0 {
+				var parts []string
+				for _, c := range vul.CVEs {
+					if c.ID != "" {
+						parts = append(parts, c.ID)
+					}
+				}
+				if len(parts) > 0 {
+					ids = strings.Join(parts, ", ")
+				}
+			}
+			hash := vul.Hash
+			if hash == "" {
+				hash = "-"
+			}
+			errMsg := "-"
+			if vul.Error != "" {
+				errMsg = vul.Error
+			}
+			builder.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n", vul.Path, hash, ids, errMsg))
+		}
+		builder.WriteString("\n")
+	}
+
+	if summary.SBOM != nil {
+		builder.WriteString("## SBOM\n")
+		format := strings.ToUpper(string(summary.SBOM.Format))
+		builder.WriteString(fmt.Sprintf("Generated %s document with %d packages.\n\n", format, len(summary.SBOM.Packages)))
+		if summary.SBOMPath != "" {
+			builder.WriteString(fmt.Sprintf("File: `%s`\n\n", summary.SBOMPath))
+		}
+	}
+
+	if len(summary.Plugins) > 0 {
+		builder.WriteString("## Plugin Findings\n")
+		for _, res := range summary.Plugins {
+			builder.WriteString(fmt.Sprintf("### %s\n", res.Plugin))
+			if res.Error != "" {
+				builder.WriteString(fmt.Sprintf("Error: %s\n\n", res.Error))
+				continue
+			}
+			if len(res.Findings) == 0 {
+				builder.WriteString("No findings reported.\n\n")
+				continue
+			}
+			builder.WriteString("| Summary | Severity | Details |\n")
+			builder.WriteString("| --- | --- | --- |\n")
+			for _, finding := range res.Findings {
+				severity := finding.Severity
+				if severity == "" {
+					severity = "info"
+				}
+				details := "-"
+				if len(finding.Details) > 0 {
+					keys := make([]string, 0, len(finding.Details))
+					for k := range finding.Details {
+						keys = append(keys, k)
+					}
+					sort.Strings(keys)
+					pairs := make([]string, 0, len(keys))
+					for _, k := range keys {
+						pairs = append(pairs, fmt.Sprintf("%s=%v", k, finding.Details[k]))
+					}
+					details = strings.Join(pairs, "; ")
+				}
+				builder.WriteString(fmt.Sprintf("| %s | %s | %s |\n", finding.Summary, severity, details))
+			}
+			builder.WriteString("\n")
+		}
 	}
 
 	return builder.String()

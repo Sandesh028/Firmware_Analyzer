@@ -5,15 +5,24 @@ extraction and analysis modules. The minimal invocation requires the firmware
 image path:
 
 ```bash
-go run ./cmd/analyzer --fw firmware.tgz
+go run ./cmd/analyzer --fw firmware.tgz --out ./analysis \
+  --report-formats markdown,json --sbom-format spdx
 ```
 
 ## Flags
 
 - `--fw` (required): path to the firmware image archive or directory.
-- `--out`: optional directory where the workspace and generated reports will be
-  written. When omitted, a temporary directory under the system temp location is
-  created automatically.
+- `--out`: optional directory where the workspace and generated artefacts will
+  be written. When omitted, a temporary directory under the system temp location
+  is created automatically.
+- `--report-formats`: comma separated list enabling `markdown`, `html`, and/or
+  `json` report outputs. Defaults to all formats.
+- `--vuln-db`: comma separated list of JSON files containing `sha256 -> CVE`
+  mappings used to enrich binary inspection results.
+- `--sbom-format`: choose `spdx`, `cyclonedx`, or `none` to control SBOM
+  generation.
+- `--plugin-dir`: directory containing executable scripts that emit JSON
+  findings for custom checks.
 
 ## Output Structure
 
@@ -21,9 +30,11 @@ go run ./cmd/analyzer --fw firmware.tgz
 <output>/
 ├── workspace/       # normalised extraction root
 │   ├── ...
-└── report/
-    ├── report.md    # Markdown summary
-    └── report.html  # HTML view
+    └── report/
+        ├── report.md        # Markdown summary (if selected)
+        ├── report.html      # HTML view (if selected)
+        ├── report.json      # Structured JSON output (if selected)
+        └── sbom.spdx.json   # SBOM artefact (format depends on flag)
 ```
 
 If `--out` is not provided the report directory is written inside the extracted

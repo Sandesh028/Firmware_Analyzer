@@ -8,22 +8,29 @@ CLI entrypoint.
 
 ## Features
 
-- Firmware extraction with built-in support for tar/tgz/zip images and
-  workspace normalisation
-- Filesystem probing for SquashFS, UBI and ext files
-- Configuration parsing across JSON, XML, TOML and INI with credential
+- Firmware extraction with built-in support for tar/tgz/zip images, nested
+  partition discovery, and workspace normalisation
+- Filesystem probing for SquashFS, UBI, ext, GPT and MTD images without mounts
+- Configuration parsing across JSON, XML, YAML, TOML and INI with credential
   heuristics
 - Service detection for SysV/BUSYBOX init scripts and systemd units
 - Regex and entropy based secrets scanning with allow-list support
-- Binary hardening analysis with Markdown/HTML reporting
+- Binary hardening analysis with Markdown, HTML and JSON reporting
+- CVE enrichment for inspected binaries using offline hash databases
+- SBOM generation (SPDX or CycloneDX JSON) for downstream tooling
+- Plugin execution framework for custom checks written in any language
 
 ## Usage
 
 ```bash
-go run ./cmd/analyzer --fw /path/to/firmware.bin --out /tmp/report
+go run ./cmd/analyzer --fw /path/to/firmware.bin --out /tmp/report \
+  --report-formats markdown,json \
+  --vuln-db /path/to/vuln-db.json \
+  --sbom-format spdx \
+  --plugin-dir ./plugins
 ```
 
-The analyzer writes the extracted workspace and generated reports inside the
+The analyzer writes the extracted workspace and generated artefacts inside the
 specified output directory. When `--out` is omitted a temporary workspace is
 created alongside the extracted firmware.
 

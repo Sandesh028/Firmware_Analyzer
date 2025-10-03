@@ -5,24 +5,21 @@ triage. The following milestones track planned enhancements:
 
 ## Short Term
 
-- Add optional integration with external extraction tools (binwalk/unblob) when
-  available on the host system.
-- Expand filesystem detection to parse partition tables (MTD, GPT) and identify
-  mounted rootfs directories more accurately.
-- Improve configuration parsing coverage with YAML and proprietary formats
-  commonly seen in drone ecosystems.
+- Ship a curated vulnerability database bundle and tooling to update it
+  alongside releases.
+- Capture richer filesystem metadata (e.g. partition offsets and compression
+  statistics) for SBOM annotations.
+- Extend plugin execution with structured input (workspace metadata) and
+  enforce resource limits per plugin.
 
 ## Medium Term
 
-- Introduce CVE enrichment by hashing binaries and querying vulnerability data
-  sources.
-- Generate SBOM artefacts (SPDX/CycloneDX) for firmware contents.
-- Provide structured JSON output alongside Markdown/HTML for ingestion into
-  other tooling.
+- Support additional SBOM formats (e.g. SPDX tag-value) and signing options.
+- Integrate optional online CVE lookups (OSV, NVD) with caching and rate limiting.
+- Emit diff reports to compare two firmware images across all analyzers.
 
 ## Long Term
 
-- Implement a plugin framework so teams can drop-in custom checks without
-  modifying the core.
 - Offer a web dashboard for browsing analysis history and diffing firmware
   versions over time.
+- Introduce a scheduler for batch analysis and remote execution targets.

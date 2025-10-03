@@ -9,7 +9,10 @@ import (
 	"firmwareanalyzer/pkg/binaryinspector"
 	"firmwareanalyzer/pkg/extractor"
 	"firmwareanalyzer/pkg/filesystem"
+	"firmwareanalyzer/pkg/plugin"
 	"firmwareanalyzer/pkg/report"
+	"firmwareanalyzer/pkg/sbom"
+	"firmwareanalyzer/pkg/vuln"
 )
 
 func TestReportMarkdownContainsSections(t *testing.T) {
@@ -57,6 +60,7 @@ func TestReportWriteFilesHonoursFormats(t *testing.T) {
 		Extraction: &extractor.Result{
 			OutputDir: "/tmp/out",
 		},
+		SBOM: &sbom.Document{Format: sbom.FormatSPDX},
 	}
 	gen := report.NewGenerator(nil)
 	outDir := t.TempDir()
@@ -89,5 +93,31 @@ func TestReportWriteFilesHonoursFormats(t *testing.T) {
 	}
 	if filepath.Dir(paths.Markdown) != outDir {
 		t.Fatalf("markdown path outside output dir")
+	}
+}
+
+func TestReportIncludesVulnerabilitiesAndPlugins(t *testing.T) {
+	summary := report.Summary{
+		Firmware: "sample.bin",
+		Vulnerable: []vuln.Finding{{
+			Path: "bin/app",
+			Hash: "abc",
+			CVEs: []vuln.CVE{{ID: "CVE-2024-0001"}},
+		}},
+		Plugins: []plugin.Result{{
+			Plugin: "custom",
+			Findings: []plugin.Finding{{
+				Summary:  "issue",
+				Severity: "medium",
+			}},
+		}},
+	}
+	gen := report.NewGenerator(nil)
+	md := gen.Markdown(summary)
+	if !strings.Contains(md, "Vulnerabilities") {
+		t.Fatalf("expected vulnerabilities section")
+	}
+	if !strings.Contains(md, "Plugin Findings") {
+		t.Fatalf("expected plugin section")
 	}
 }

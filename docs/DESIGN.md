@@ -11,15 +11,21 @@ matching) can be integrated without modifying the existing workflow heavily.
   records partition metadata for downstream modules.
 - `pkg/filesystem` performs signature-based identification of embedded
   filesystem images without needing privileged mounts.
-- `pkg/configparser` flattens JSON, XML, TOML and INI configuration files into
-  dot-notated key/value pairs that higher layers can consume.
+- `pkg/configparser` flattens JSON, XML, YAML, TOML and INI configuration files
+  into dot-notated key/value pairs that higher layers can consume.
 - `pkg/service` inventories init scripts and unit files to provide visibility
   into boot-time services.
 - `pkg/secrets` scans text content for credential material using regular
   expressions, Shannon entropy and optional allow-lists.
 - `pkg/binaryinspector` analyses ELF binaries for hardening settings such as
   RELRO, NX and PIE and renders Markdown tables for reports.
-- `pkg/report` composes module results into Markdown and HTML artefacts.
+- `pkg/vuln` hashes binaries and enriches them with CVE metadata from offline
+  databases.
+- `pkg/sbom` produces lightweight SPDX or CycloneDX JSON documents describing
+  detected packages and binaries.
+- `pkg/plugin` executes external scripts that emit JSON findings, enabling
+  custom organisational checks without modifying the core.
+- `pkg/report` composes module results into Markdown, HTML and JSON artefacts.
 - `pkg/utils` hosts shared helpers for map flattening, entropy calculations and
   heuristic utilities.
 
@@ -30,8 +36,9 @@ matching) can be integrated without modifying the existing workflow heavily.
 2. **Scanning** – Filesystem detection, configuration parsing, service
    discovery, secret scanning and binary inspection operate on the workspace in
    parallel-friendly fashion (currently sequenced within the CLI for clarity).
-3. **Reporting** – The report generator aggregates module outputs into Markdown
-   and HTML documents, preserving tabular data for further processing.
+3. **Reporting** – The report generator aggregates module outputs into Markdown,
+   HTML and JSON documents, while SBOM and vulnerability data are persisted for
+   downstream pipelines.
 
 ## Testing Strategy
 

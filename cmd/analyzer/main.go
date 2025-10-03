@@ -14,15 +14,21 @@ import (
 	"firmwareanalyzer/pkg/configparser"
 	"firmwareanalyzer/pkg/extractor"
 	"firmwareanalyzer/pkg/filesystem"
+	"firmwareanalyzer/pkg/plugin"
 	"firmwareanalyzer/pkg/report"
+	"firmwareanalyzer/pkg/sbom"
 	"firmwareanalyzer/pkg/secrets"
 	"firmwareanalyzer/pkg/service"
+	"firmwareanalyzer/pkg/vuln"
 )
 
 func main() {
 	firmwarePath := flag.String("fw", "", "path to the firmware image")
 	outputDir := flag.String("out", "", "directory for reports and working files")
 	formatFlag := flag.String("report-formats", "markdown,html,json", "comma-separated list of report formats (markdown, html, json)")
+	vulnDBFlag := flag.String("vuln-db", "", "comma-separated list of CVE database files")
+	sbomFormatFlag := flag.String("sbom-format", "spdx", "SBOM output format (spdx, cyclonedx, none)")
+	pluginDirFlag := flag.String("plugin-dir", "", "directory containing analyzer plugins")
 	flag.Parse()
 
 	if *firmwarePath == "" {
@@ -76,6 +82,23 @@ func main() {
 		logger.Printf("binary inspection error: %v", err)
 	}
 
+	vulnEnricher := vuln.NewEnricher(logger, vuln.Options{DatabasePaths: parseList(*vulnDBFlag)})
+	vulnerabilityFindings, err := vulnEnricher.Enrich(ctx, binaries)
+	if err != nil {
+		logger.Printf("vulnerability enrichment error: %v", err)
+	}
+
+	sbomFormat, err := parseSBOMFormat(*sbomFormatFlag)
+	if err != nil {
+		log.Fatalf("invalid sbom format: %v", err)
+	}
+
+	pluginRunner := plugin.NewRunner(logger, plugin.Options{Directory: *pluginDirFlag})
+	pluginResults, err := pluginRunner.Run(ctx, analysisRoot)
+	if err != nil {
+		logger.Printf("plugin execution error: %v", err)
+	}
+
 	summary := report.Summary{
 		Firmware:    *firmwarePath,
 		Extraction:  extraction,
@@ -84,6 +107,8 @@ func main() {
 		Services:    services,
 		Secrets:     secretFindings,
 		Binaries:    binaries,
+		Vulnerable:  vulnerabilityFindings,
+		Plugins:     pluginResults,
 	}
 
 	formats, err := parseReportFormats(*formatFlag)
@@ -96,12 +121,32 @@ func main() {
 	if outDir == "" {
 		outDir = filepath.Join(extraction.OutputDir, "report")
 	}
+
+	if sbomFormat != "" {
+		sbomGenerator := sbom.NewGenerator(logger, sbom.Options{Format: sbomFormat, ProductName: filepath.Base(*firmwarePath)})
+		doc, err := sbomGenerator.Generate(ctx, analysisRoot, binaries)
+		if err != nil {
+			logger.Printf("sbom generation error: %v", err)
+		} else {
+			sbomPath := filepath.Join(outDir, fmt.Sprintf("sbom.%s.json", sbomFormat))
+			if err := sbom.WriteJSON(doc, sbomPath); err != nil {
+				logger.Printf("sbom write error: %v", err)
+			} else {
+				summary.SBOM = &doc
+				summary.SBOMPath = sbomPath
+			}
+		}
+	}
+
 	paths, err := generator.WriteFiles(summary, outDir, formats)
 	if err != nil {
 		log.Fatalf("write report: %v", err)
 	}
 
 	logger.Printf("reports written (md=%s html=%s json=%s)", paths.Markdown, paths.HTML, paths.JSON)
+	if summary.SBOMPath != "" {
+		logger.Printf("sbom written %s", summary.SBOMPath)
+	}
 	logger.Printf("analysis complete in %s", time.Since(start).Round(time.Millisecond))
 }
 
@@ -132,4 +177,35 @@ func parseReportFormats(value string) (report.Formats, error) {
 		return report.Formats{}, fmt.Errorf("no valid report formats selected")
 	}
 	return formats, nil
+}
+
+func parseList(value string) []string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	tokens := strings.Split(trimmed, ",")
+	var out []string
+	for _, token := range tokens {
+		t := strings.TrimSpace(token)
+		if t == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func parseSBOMFormat(value string) (sbom.Format, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(value))
+	switch trimmed {
+	case "", "spdx":
+		return sbom.FormatSPDX, nil
+	case "cyclonedx", "cdx":
+		return sbom.FormatCycloneDX, nil
+	case "none":
+		return "", nil
+	default:
+		return "", fmt.Errorf("unknown sbom format %q", value)
+	}
 }
