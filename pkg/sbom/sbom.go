@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"firmwareanalyzer/pkg/binaryinspector"
+	"firmwareanalyzer/pkg/extractor"
 )
 
 // Format enumerates supported SBOM representations.
@@ -41,10 +42,11 @@ type Package struct {
 
 // Document is the format-agnostic SBOM representation used internally.
 type Document struct {
-	Format   Format    `json:"format"`
-	Created  time.Time `json:"created"`
-	Name     string    `json:"name"`
-	Packages []Package `json:"packages"`
+	Format     Format                `json:"format"`
+	Created    time.Time             `json:"created"`
+	Name       string                `json:"name"`
+	Packages   []Package             `json:"packages"`
+	Partitions []extractor.Partition `json:"partitions,omitempty"`
 }
 
 // Generator produces SBOM documents for extracted firmware trees.
@@ -66,8 +68,9 @@ func NewGenerator(logger *log.Logger, opts Options) *Generator {
 
 // Generate inspects the extraction root and produces an SBOM document. Package
 // information is sourced from package manager metadata when available and
-// otherwise falls back to binaries discovered during inspection.
-func (g *Generator) Generate(ctx context.Context, root string, binaries []binaryinspector.Result) (Document, error) {
+// otherwise falls back to binaries discovered during inspection. Partition
+// metadata is included to provide additional context for downstream tooling.
+func (g *Generator) Generate(ctx context.Context, root string, binaries []binaryinspector.Result, partitions []extractor.Partition) (Document, error) {
 	packages, err := g.detectPackages(ctx, root)
 	if err != nil {
 		return Document{}, err
@@ -87,10 +90,11 @@ func (g *Generator) Generate(ctx context.Context, root string, binaries []binary
 		name = filepath.Base(root)
 	}
 	return Document{
-		Format:   g.opts.Format,
-		Created:  time.Now().UTC(),
-		Name:     name,
-		Packages: packages,
+		Format:     g.opts.Format,
+		Created:    time.Now().UTC(),
+		Name:       name,
+		Packages:   packages,
+		Partitions: partitions,
 	}, nil
 }
 

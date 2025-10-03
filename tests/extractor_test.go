@@ -68,7 +68,7 @@ func TestExtractorHandlesTarGz(t *testing.T) {
 	var sawSquash bool
 	for _, part := range result.Partitions {
 		if part.Type == "squashfs" && strings.HasSuffix(part.Path, "rootfs.squashfs") {
-			sawSquash = part.Notes != ""
+			sawSquash = part.Notes != "" && part.Compression != ""
 		}
 	}
 	if !sawSquash {

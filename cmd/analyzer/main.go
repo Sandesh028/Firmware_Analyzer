@@ -94,7 +94,17 @@ func main() {
 	}
 
 	pluginRunner := plugin.NewRunner(logger, plugin.Options{Directory: *pluginDirFlag})
-	pluginResults, err := pluginRunner.Run(ctx, analysisRoot)
+	pluginResults, err := pluginRunner.Run(ctx, plugin.Metadata{
+		Firmware:        *firmwarePath,
+		Root:            analysisRoot,
+		Partitions:      extraction.Partitions,
+		FileSystems:     mounts,
+		Configs:         configs,
+		Services:        services,
+		Secrets:         secretFindings,
+		Binaries:        binaries,
+		Vulnerabilities: vulnerabilityFindings,
+	})
 	if err != nil {
 		logger.Printf("plugin execution error: %v", err)
 	}
@@ -124,7 +134,7 @@ func main() {
 
 	if sbomFormat != "" {
 		sbomGenerator := sbom.NewGenerator(logger, sbom.Options{Format: sbomFormat, ProductName: filepath.Base(*firmwarePath)})
-		doc, err := sbomGenerator.Generate(ctx, analysisRoot, binaries)
+		doc, err := sbomGenerator.Generate(ctx, analysisRoot, binaries, extraction.Partitions)
 		if err != nil {
 			logger.Printf("sbom generation error: %v", err)
 		} else {

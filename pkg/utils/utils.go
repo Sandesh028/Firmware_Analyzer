@@ -2,7 +2,9 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -87,6 +89,62 @@ func ShannonEntropy(text string) float64 {
 		entropy -= p * math.Log2(p)
 	}
 	return entropy
+}
+
+// ByteEntropy calculates the Shannon entropy of raw byte data. It is useful
+// for determining whether files are compressed or encrypted where text-based
+// heuristics are ineffective.
+func ByteEntropy(data []byte) float64 {
+	if len(data) == 0 {
+		return 0
+	}
+	var freq [256]int
+	for _, b := range data {
+		freq[int(b)]++
+	}
+	entropy := 0.0
+	total := float64(len(data))
+	for _, count := range freq {
+		if count == 0 {
+			continue
+		}
+		p := float64(count) / total
+		entropy -= p * math.Log2(p)
+	}
+	return entropy
+}
+
+// SampleFileEntropy reads up to limit bytes from the supplied path and returns
+// the Shannon entropy of the collected data. A zero or negative limit defaults
+// to sampling the first 512KiB. The function is designed for large firmware
+// artefacts where full-file processing would be unnecessarily expensive.
+func SampleFileEntropy(path string, limit int64) (float64, error) {
+	if limit <= 0 {
+		limit = 512 << 10
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+
+	buf := make([]byte, limit)
+	n, err := io.ReadFull(file, buf)
+	if err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			// Partial reads are expected for files smaller than the
+			// requested sample size.
+			if n == 0 {
+				return 0, nil
+			}
+			buf = buf[:n]
+		} else {
+			return 0, fmt.Errorf("read file: %w", err)
+		}
+	} else {
+		buf = buf[:n]
+	}
+	return ByteEntropy(buf), nil
 }
 
 // LooksLikeText checks whether a byte slice appears to be text by verifying

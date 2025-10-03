@@ -60,18 +60,26 @@ func (g *Generator) Markdown(summary Summary) string {
 		builder.WriteString("## Extraction\n")
 		builder.WriteString(fmt.Sprintf("Output directory: `%s`\n\n", summary.Extraction.OutputDir))
 		if len(summary.Extraction.Partitions) > 0 {
-			builder.WriteString("| Name | Type | Size (bytes) | Offset | Notes | Path |\n")
-			builder.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+			builder.WriteString("| Name | Type | Size (bytes) | Offset | Entropy | Compression | Notes | Path |\n")
+			builder.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 			for _, part := range summary.Extraction.Partitions {
 				offset := "-"
 				if part.Offset > 0 {
 					offset = fmt.Sprintf("%d", part.Offset)
 				}
+				entropy := "-"
+				if part.Entropy > 0 {
+					entropy = fmt.Sprintf("%.2f", part.Entropy)
+				}
+				compression := part.Compression
+				if compression == "" {
+					compression = "-"
+				}
 				notes := part.Notes
 				if notes == "" {
 					notes = "-"
 				}
-				builder.WriteString(fmt.Sprintf("| %s | %s | %d | %s | %s | %s |\n", part.Name, part.Type, part.Size, offset, notes, part.Path))
+				builder.WriteString(fmt.Sprintf("| %s | %s | %d | %s | %s | %s | %s | %s |\n", part.Name, part.Type, part.Size, offset, entropy, compression, notes, part.Path))
 			}
 			builder.WriteString("\n")
 		}

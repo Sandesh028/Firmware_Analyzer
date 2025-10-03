@@ -21,12 +21,14 @@ func TestReportMarkdownContainsSections(t *testing.T) {
 		Extraction: &extractor.Result{
 			OutputDir: "/tmp/out",
 			Partitions: []extractor.Partition{{
-				Name:   "rootfs.squashfs",
-				Path:   "/tmp/out/rootfs.squashfs",
-				Type:   "squashfs",
-				Size:   1024,
-				Offset: 4096,
-				Notes:  "detected via extension",
+				Name:        "rootfs.squashfs",
+				Path:        "/tmp/out/rootfs.squashfs",
+				Type:        "squashfs",
+				Size:        1024,
+				Offset:      4096,
+				Notes:       "detected via extension",
+				Entropy:     7.8,
+				Compression: "high",
 			}},
 		},
 		FileSystems: []filesystem.Mount{{
@@ -47,8 +49,8 @@ func TestReportMarkdownContainsSections(t *testing.T) {
 	if !strings.Contains(md, "# Drone Firmware Analyzer Report") {
 		t.Fatalf("missing heading: %s", md)
 	}
-	if !strings.Contains(md, "Offset") {
-		t.Fatalf("expected offset column: %s", md)
+	if !strings.Contains(md, "Compression") {
+		t.Fatalf("expected compression column: %s", md)
 	}
 }
 

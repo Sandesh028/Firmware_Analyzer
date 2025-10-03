@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"firmwareanalyzer/pkg/binaryinspector"
+	"firmwareanalyzer/pkg/extractor"
 	"firmwareanalyzer/pkg/sbom"
 )
 
@@ -24,7 +25,8 @@ func TestSBOMGeneratorReadsOpkgControls(t *testing.T) {
 	}
 
 	gen := sbom.NewGenerator(nil, sbom.Options{Format: sbom.FormatSPDX, ProductName: "test"})
-	doc, err := gen.Generate(context.Background(), root, nil)
+	part := extractor.Partition{Name: "rootfs", Path: root, Type: "directory"}
+	doc, err := gen.Generate(context.Background(), root, nil, []extractor.Partition{part})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -33,6 +35,9 @@ func TestSBOMGeneratorReadsOpkgControls(t *testing.T) {
 	}
 	if doc.Packages[0].Name != "busybox" || doc.Packages[0].Version != "1.36.0" {
 		t.Fatalf("unexpected package data: %#v", doc.Packages[0])
+	}
+	if len(doc.Partitions) != 1 || doc.Partitions[0].Name != "rootfs" {
+		t.Fatalf("expected partition metadata, got %#v", doc.Partitions)
 	}
 }
 
@@ -49,7 +54,7 @@ func TestSBOMGeneratorFallsBackToBinaries(t *testing.T) {
 	}
 
 	gen := sbom.NewGenerator(nil, sbom.Options{Format: sbom.FormatCycloneDX})
-	doc, err := gen.Generate(context.Background(), root, []binaryinspector.Result{{Path: binPath}})
+	doc, err := gen.Generate(context.Background(), root, []binaryinspector.Result{{Path: binPath}}, nil)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}

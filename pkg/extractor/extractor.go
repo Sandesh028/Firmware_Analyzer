@@ -23,12 +23,14 @@ import (
 
 // Partition describes a logical filesystem extracted from a firmware image.
 type Partition struct {
-	Name   string `json:"name"`
-	Path   string `json:"path"`
-	Type   string `json:"type"`
-	Size   int64  `json:"size"`
-	Offset int64  `json:"offset,omitempty"`
-	Notes  string `json:"notes,omitempty"`
+	Name        string  `json:"name"`
+	Path        string  `json:"path"`
+	Type        string  `json:"type"`
+	Size        int64   `json:"size"`
+	Offset      int64   `json:"offset,omitempty"`
+	Notes       string  `json:"notes,omitempty"`
+	Entropy     float64 `json:"entropy,omitempty"`
+	Compression string  `json:"compression,omitempty"`
 }
 
 // Result holds metadata about an extraction run.
@@ -383,11 +385,12 @@ func discoverPartitions(root string) ([]Partition, error) {
 				return err
 			}
 			parts = append(parts, Partition{
-				Name:  rel,
-				Path:  path,
-				Type:  "directory",
-				Size:  info.Size(),
-				Notes: "contains system directories",
+				Name:        rel,
+				Path:        path,
+				Type:        "directory",
+				Size:        info.Size(),
+				Notes:       "contains system directories",
+				Compression: "n/a",
 			})
 			return nil
 		}
@@ -403,13 +406,27 @@ func discoverPartitions(root string) ([]Partition, error) {
 		if partType == "" {
 			return nil
 		}
+		entropy, entropyErr := utils.SampleFileEntropy(path, 0)
+		if entropyErr != nil {
+			// Entropy calculation failures should not abort
+			// partition discovery; surface the message in notes
+			// for operator awareness.
+			if notes == "" {
+				notes = entropyErr.Error()
+			} else {
+				notes = notes + "; entropy: " + entropyErr.Error()
+			}
+			entropy = 0
+		}
 		parts = append(parts, Partition{
-			Name:   rel,
-			Path:   path,
-			Type:   partType,
-			Size:   info.Size(),
-			Offset: offset,
-			Notes:  notes,
+			Name:        rel,
+			Path:        path,
+			Type:        partType,
+			Size:        info.Size(),
+			Offset:      offset,
+			Notes:       notes,
+			Entropy:     entropy,
+			Compression: compressionCategory(entropy),
 		})
 		return nil
 	})
@@ -418,6 +435,19 @@ func discoverPartitions(root string) ([]Partition, error) {
 	}
 	sort.Slice(parts, func(i, j int) bool { return parts[i].Name < parts[j].Name })
 	return parts, nil
+}
+
+func compressionCategory(entropy float64) string {
+	switch {
+	case entropy == 0:
+		return "unknown"
+	case entropy >= 7.5:
+		return "high"
+	case entropy >= 6.0:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func classifyPartition(path string) (string, int64, string, error) {

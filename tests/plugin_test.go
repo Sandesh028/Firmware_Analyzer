@@ -18,13 +18,19 @@ func TestPluginRunnerExecutesScripts(t *testing.T) {
 
 	dir := t.TempDir()
 	script := filepath.Join(dir, "sample.sh")
-	content := "#!/bin/sh\nprintf '[{\"summary\":\"ok\",\"severity\":\"low\"}]'"
+	content := "#!/bin/sh\n" +
+		"payload=$(cat)\n" +
+		"echo \"$payload\" | grep -q sample.bin || exit 1\n" +
+		"[ \"$ANALYZER_METADATA_FORMAT\" = \"json\" ] || exit 1\n" +
+		"[ -n \"$ANALYZER_ROOT\" ] || exit 1\n" +
+		"printf '[{\"summary\":\"ok\",\"severity\":\"low\"}]'\n"
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
 	runner := plugin.NewRunner(nil, plugin.Options{Directory: dir})
-	results, err := runner.Run(context.Background(), t.TempDir())
+	root := t.TempDir()
+	results, err := runner.Run(context.Background(), plugin.Metadata{Firmware: "sample.bin", Root: root})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -50,7 +56,7 @@ func TestPluginRunnerCapturesErrors(t *testing.T) {
 	}
 
 	runner := plugin.NewRunner(nil, plugin.Options{Directory: dir})
-	results, err := runner.Run(context.Background(), t.TempDir())
+	results, err := runner.Run(context.Background(), plugin.Metadata{Firmware: "sample.bin", Root: t.TempDir()})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
