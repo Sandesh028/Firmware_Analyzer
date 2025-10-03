@@ -57,3 +57,30 @@ func TestConfigParserParsesMultipleFormats(t *testing.T) {
 		t.Fatalf("expected credential heuristics to trigger")
 	}
 }
+
+func TestConfigParserSkipsMalformedXML(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	jsonPath := filepath.Join(root, "valid.json")
+	if err := os.WriteFile(jsonPath, []byte(`{"service":"ok"}`), 0o644); err != nil {
+		t.Fatalf("write json: %v", err)
+	}
+	badXML := filepath.Join(root, "broken.xml")
+	if err := os.WriteFile(badXML, []byte(`<config><value>bad&value</value></config>`), 0o644); err != nil {
+		t.Fatalf("write bad xml: %v", err)
+	}
+
+	parser := configparser.NewParser(nil)
+	findings, err := parser.Parse(context.Background(), root)
+	if err != nil {
+		t.Fatalf("parse configs: %v", err)
+	}
+
+	if len(findings) != 1 {
+		t.Fatalf("expected only the valid json to produce findings, got %d", len(findings))
+	}
+	if findings[0].File != jsonPath {
+		t.Fatalf("unexpected finding file %s", findings[0].File)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"firmwareanalyzer/pkg/secrets"
@@ -84,5 +85,21 @@ func TestSecretsScannerDetectsJWTAndAllowsSuppression(t *testing.T) {
 		if finding.Rule == "Slack Token" {
 			t.Fatalf("expected slack token to be suppressed, got %#v", findings)
 		}
+	}
+}
+
+func TestSecretsScannerHandlesLongLines(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "long.txt")
+	longValue := strings.Repeat("A", 200000)
+	if err := os.WriteFile(file, []byte("token="+longValue), 0o644); err != nil {
+		t.Fatalf("write long file: %v", err)
+	}
+
+	scanner := secrets.NewScanner(nil, nil)
+	if _, err := scanner.Scan(context.Background(), root); err != nil {
+		t.Fatalf("scan long file: %v", err)
 	}
 }

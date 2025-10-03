@@ -114,7 +114,8 @@ func (p *Parser) parseFile(path, format string) (Finding, error) {
 	case "xml":
 		flat, err = parseXML(data)
 		if err != nil {
-			return Finding{}, err
+			p.logger.Printf("skipping malformed xml %s: %v", path, err)
+			return Finding{File: path, Format: format}, nil
 		}
 	case "yaml":
 		var raw any

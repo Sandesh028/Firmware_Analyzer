@@ -62,7 +62,7 @@ func New(opts Options, logger *log.Logger) *Extractor {
 	if logger == nil {
 		logger = log.New(io.Discard, "extractor", log.LstdFlags)
 	}
-	if len(opts.ExternalExtractors) == 0 {
+	if opts.ExternalExtractors == nil {
 		opts.ExternalExtractors = []string{"unblob", "binwalk"}
 	}
 	return &Extractor{opts: opts, logger: logger}
@@ -306,6 +306,9 @@ func extractZip(ctx context.Context, src, dst string) error {
 
 func (e *Extractor) tryExternal(ctx context.Context, firmwarePath, outputDir string) (bool, error) {
 	for _, tool := range e.opts.ExternalExtractors {
+		if strings.TrimSpace(tool) == "" {
+			continue
+		}
 		ok, err := e.runExternal(ctx, tool, firmwarePath, outputDir)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -322,6 +325,9 @@ func (e *Extractor) tryExternal(ctx context.Context, firmwarePath, outputDir str
 }
 
 func (e *Extractor) runExternal(ctx context.Context, tool, firmwarePath, outputDir string) (bool, error) {
+	if strings.TrimSpace(tool) == "" {
+		return false, nil
+	}
 	path, err := exec.LookPath(tool)
 	if err != nil {
 		return false, nil
@@ -365,6 +371,7 @@ func normalizeRoot(dir string) string {
 
 func discoverPartitions(root string) ([]Partition, error) {
 	var parts []Partition
+	seenDirs := make(map[string]struct{})
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -377,13 +384,20 @@ func discoverPartitions(root string) ([]Partition, error) {
 			return err
 		}
 		if d.IsDir() {
+			if strings.Contains(rel, string(os.PathSeparator)) {
+				return nil
+			}
 			if !utils.LooksLikeRoot(path) {
+				return nil
+			}
+			if _, seen := seenDirs[rel]; seen {
 				return nil
 			}
 			info, err := d.Info()
 			if err != nil {
 				return err
 			}
+			seenDirs[rel] = struct{}{}
 			parts = append(parts, Partition{
 				Name:        rel,
 				Path:        path,

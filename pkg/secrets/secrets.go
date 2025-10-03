@@ -1,7 +1,7 @@
 package secrets
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -142,18 +142,11 @@ func (s *Scanner) scanFile(path string) ([]Finding, error) {
 		return nil, nil
 	}
 
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
 	var findings []Finding
-	scanner := bufio.NewScanner(file)
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
+	lines := bytes.Split(data, []byte{'\n'})
+	for i, rawLine := range lines {
+		lineNum := i + 1
+		line := strings.TrimRight(string(rawLine), "\r")
 		for _, pat := range s.patterns {
 			matches := pat.re.FindAllStringSubmatch(line, -1)
 			if len(matches) == 0 {
@@ -186,9 +179,6 @@ func (s *Scanner) scanFile(path string) ([]Finding, error) {
 				}
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	return findings, nil
 }

@@ -51,7 +51,7 @@ func TestExtractorHandlesTarGz(t *testing.T) {
 		t.Fatalf("write firmware: %v", err)
 	}
 
-	ext := extractor.New(extractor.Options{}, nil)
+	ext := extractor.New(extractor.Options{ExternalExtractors: []string{}}, nil)
 	result, err := ext.Extract(context.Background(), firmwarePath)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
@@ -69,6 +69,9 @@ func TestExtractorHandlesTarGz(t *testing.T) {
 	for _, part := range result.Partitions {
 		if part.Type == "squashfs" && strings.HasSuffix(part.Path, "rootfs.squashfs") {
 			sawSquash = part.Notes != "" && part.Compression != ""
+		}
+		if part.Type == "directory" && strings.Contains(part.Name, string(os.PathSeparator)) {
+			t.Fatalf("unexpected nested directory partition %q", part.Name)
 		}
 	}
 	if !sawSquash {
@@ -101,7 +104,7 @@ func TestExtractorNormalizesSingleDirectoryRoot(t *testing.T) {
 		t.Fatalf("write firmware: %v", err)
 	}
 
-	ext := extractor.New(extractor.Options{}, nil)
+	ext := extractor.New(extractor.Options{ExternalExtractors: []string{}}, nil)
 	result, err := ext.Extract(context.Background(), firmwarePath)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
