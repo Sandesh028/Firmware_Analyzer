@@ -17,8 +17,11 @@ CLI entrypoint.
 - Regex and entropy based secrets scanning with allow-list support
 - Binary hardening analysis with Markdown, HTML and JSON reporting
 - CVE enrichment for inspected binaries using offline hash databases
-- SBOM generation (SPDX or CycloneDX JSON) for downstream tooling
+- SBOM generation (SPDX JSON, SPDX tag-value, or CycloneDX) with optional
+  Ed25519 signing for downstream tooling
 - Plugin execution framework for custom checks written in any language
+- Optional online CVE enrichment via OSV/NVD with caching and rate limiting
+- Firmware-to-firmware diff reports in Markdown and JSON for regression triage
 
 ## Prerequisites
 
@@ -69,7 +72,9 @@ go test ./...
 go run ./cmd/analyzer --fw /path/to/firmware.bin --out /tmp/report \
   --report-formats markdown,json \
   --vuln-db /path/to/vuln-db.json \
-  --sbom-format spdx \
+  --sbom-format spdx-json,spdx-tag-value \
+  --sbom-sign-key ./keys/ed25519.pem \
+  --enable-osv --enable-nvd --vuln-cache-dir /tmp/cache \
   --plugin-dir ./plugins
 ```
 
@@ -87,24 +92,49 @@ created alongside the extracted firmware.
 - `--vuln-db` – comma separated list of offline CVE database files. Each file
   should map SHA-256 hashes to CVE arrays. When omitted the analyzer falls back
   to the curated database bundled at build time.
-- `--sbom-format` – choose `spdx`, `cyclonedx`, or `none` to control SBOM
-  emission.
+- `--sbom-format` – comma separated SBOM formats (`spdx-json`, `spdx-tag-value`,
+  `cyclonedx`, or `none`).
+- `--sbom-sign-key` – path to an Ed25519 private key in PEM format used to sign
+  generated SBOM artefacts (produces `.sig` files alongside each SBOM).
+- `--baseline-report` – path to a previous `report.json` used for diffing the
+  current analysis against a baseline.
+- `--diff-formats` – comma separated diff artefact formats (`markdown`, `json`).
 - `--plugin-dir` – directory containing executable plugins. Plugins receive the
   analysis metadata as JSON on stdin together with `ANALYZER_ROOT` and
   `ANALYZER_METADATA_FORMAT=json` environment variables.
+- `--enable-osv` / `--osv-endpoint` – enable and optionally override the OSV
+  API endpoint for online CVE enrichment.
+- `--enable-nvd` / `--nvd-endpoint` / `--nvd-api-key` – enable NVD lookups,
+  override the endpoint, and provide an API key when required by rate limits.
+- `--vuln-cache-dir` – directory where online lookup responses are cached to
+  avoid duplicate API calls across runs.
+- `--vuln-rate-limit` – maximum number of online vulnerability requests per
+  minute (defaults to 30 when unset).
 
 ### Explore the tool
 
-- Generate all report formats plus a CycloneDX SBOM:
+- Generate all report formats plus signed SPDX JSON + tag-value SBOMs:
 
   ```bash
-  ./analyzer --fw firmware.bin --out ./analysis --report-formats markdown,html,json --sbom-format cyclonedx
+  ./analyzer --fw firmware.bin --out ./analysis \
+    --report-formats markdown,html,json \
+    --sbom-format spdx-json,spdx-tag-value \
+    --sbom-sign-key ./keys/ed25519.pem
   ```
 
 - Run with an offline vulnerability feed and a custom plugin suite:
 
   ```bash
   ./analyzer --fw firmware.bin --out ./analysis --vuln-db ./feeds/openwrt.json --plugin-dir ./plugins
+  ```
+
+- Compare a new firmware against a previous report and enable online CVE
+  lookups with caching:
+
+  ```bash
+  ./analyzer --fw firmware-new.bin --out ./analysis \
+    --baseline-report ./previous/report.json --diff-formats markdown,json \
+    --enable-osv --enable-nvd --vuln-cache-dir ~/.cache/analyzer-cves
   ```
 
 - Quickly triage a sample firmware using the Go toolchain without installing a

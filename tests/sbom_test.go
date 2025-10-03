@@ -2,6 +2,10 @@ package tests
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,7 +28,10 @@ func TestSBOMGeneratorReadsOpkgControls(t *testing.T) {
 		t.Fatalf("write control: %v", err)
 	}
 
-	gen := sbom.NewGenerator(nil, sbom.Options{Format: sbom.FormatSPDX, ProductName: "test"})
+	gen, err := sbom.NewGenerator(nil, sbom.Options{Formats: []sbom.Format{sbom.FormatSPDXJSON}, ProductName: "test"})
+	if err != nil {
+		t.Fatalf("new generator: %v", err)
+	}
 	part := extractor.Partition{Name: "rootfs", Path: root, Type: "directory"}
 	doc, err := gen.Generate(context.Background(), root, nil, []extractor.Partition{part})
 	if err != nil {
@@ -53,7 +60,10 @@ func TestSBOMGeneratorFallsBackToBinaries(t *testing.T) {
 		t.Fatalf("write binary: %v", err)
 	}
 
-	gen := sbom.NewGenerator(nil, sbom.Options{Format: sbom.FormatCycloneDX})
+	gen, err := sbom.NewGenerator(nil, sbom.Options{Formats: []sbom.Format{sbom.FormatCycloneDX}})
+	if err != nil {
+		t.Fatalf("new generator: %v", err)
+	}
 	doc, err := gen.Generate(context.Background(), root, []binaryinspector.Result{{Path: binPath}}, nil)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
@@ -66,12 +76,53 @@ func TestSBOMGeneratorFallsBackToBinaries(t *testing.T) {
 func TestSBOMWriteJSON(t *testing.T) {
 	t.Parallel()
 
-	doc := sbom.Document{Format: sbom.FormatSPDX, Name: "test"}
+	doc := sbom.Document{Format: sbom.FormatSPDXJSON, Name: "test"}
 	out := filepath.Join(t.TempDir(), "sbom.json")
 	if err := sbom.WriteJSON(doc, out); err != nil {
 		t.Fatalf("write json: %v", err)
 	}
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("sbom file missing: %v", err)
+	}
+}
+
+func TestSBOMEncodeTagValueAndSigning(t *testing.T) {
+	t.Parallel()
+
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
+	keyPath := filepath.Join(t.TempDir(), "key.pem")
+	if err := os.WriteFile(keyPath, pemData, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	gen, err := sbom.NewGenerator(nil, sbom.Options{Formats: []sbom.Format{sbom.FormatSPDXTagValue}, SigningKeyPath: keyPath})
+	if err != nil {
+		t.Fatalf("new generator: %v", err)
+	}
+	doc := sbom.Document{Format: sbom.FormatSPDXTagValue, Name: "firmware"}
+	data, ext, err := sbom.Encode(doc, sbom.FormatSPDXTagValue)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if ext != "spdx" {
+		t.Fatalf("unexpected extension %s", ext)
+	}
+	sig, err := gen.Sign(data)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if len(sig) != ed25519.SignatureSize {
+		t.Fatalf("unexpected signature length %d", len(sig))
+	}
+	if len(data) == 0 {
+		t.Fatalf("expected tag-value content")
 	}
 }

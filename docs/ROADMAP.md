@@ -14,9 +14,13 @@ triage. The following milestones track planned enhancements:
 
 ## Medium Term
 
-- Support additional SBOM formats (e.g. SPDX tag-value) and signing options.
-- Integrate optional online CVE lookups (OSV, NVD) with caching and rate limiting.
-- Emit diff reports to compare two firmware images across all analyzers.
+- ✅ Support additional SBOM formats (e.g. SPDX tag-value) and signing options.
+- ✅ Integrate optional online CVE lookups (OSV, NVD) with caching and rate limiting.
+- ✅ Emit diff reports to compare two firmware images across all analyzers.
+- Automate SBOM publishing pipelines (CycloneDX XML, SPDX Lite) and signature
+  verification tooling.
+- Surface vulnerability severity trends and remediation hints within the CLI
+  output and reports.
 
 ## Long Term
 

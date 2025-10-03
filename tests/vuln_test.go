@@ -4,8 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"firmwareanalyzer/pkg/binaryinspector"
@@ -118,5 +122,71 @@ func TestMergeNormalisesAndDeduplicates(t *testing.T) {
 	}
 	if len(cve0001.References) != 2 {
 		t.Fatalf("expected deduplicated references, got %v", cve0001.References)
+	}
+}
+
+func TestVulnerabilityOnlineLookupCachesResults(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	binPath := filepath.Join(tmp, "firmware.bin")
+	content := []byte("firmware-data")
+	if err := os.WriteFile(binPath, content, 0o644); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+	sum := sha256.Sum256(content)
+	expectedHash := "sha256:" + hex.EncodeToString(sum[:])
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		defer r.Body.Close()
+		var payload map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if payload["hash"] != expectedHash {
+			http.Error(w, "unexpected hash", http.StatusBadRequest)
+			return
+		}
+		resp := map[string]any{
+			"vulns": []map[string]any{{
+				"id":         "CVE-2024-9999",
+				"summary":    "test vulnerability",
+				"references": []map[string]string{{"url": "https://example.com"}},
+			}},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	opts := vuln.Options{
+		DisableEmbedded: true,
+		CacheDir:        filepath.Join(tmp, "cache"),
+		OSV:             vuln.OnlineOptions{Enabled: true, Endpoint: server.URL},
+		HTTPClient:      server.Client(),
+	}
+
+	enricher := vuln.NewEnricher(nil, opts)
+	findings, err := enricher.Enrich(context.Background(), []binaryinspector.Result{{Path: binPath}})
+	if err != nil {
+		t.Fatalf("enrich: %v", err)
+	}
+	if len(findings) != 1 || len(findings[0].CVEs) != 1 {
+		t.Fatalf("expected online CVE, got %#v", findings)
+	}
+	if atomic.LoadInt32(&requests) != 1 {
+		t.Fatalf("expected one HTTP request, got %d", requests)
+	}
+
+	// Recreate the enricher to ensure disk cache is used instead of hitting the server again.
+	enricherCached := vuln.NewEnricher(nil, opts)
+	_, err = enricherCached.Enrich(context.Background(), []binaryinspector.Result{{Path: binPath}})
+	if err != nil {
+		t.Fatalf("enrich (cached): %v", err)
+	}
+	if atomic.LoadInt32(&requests) != 1 {
+		t.Fatalf("expected cached result without extra HTTP calls, got %d", requests)
 	}
 }

@@ -2,7 +2,6 @@ package sbom
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -20,16 +19,22 @@ import (
 type Format string
 
 const (
-	// FormatSPDX emits a lightweight SPDX 2.3 JSON document.
+	// FormatSPDX represents an SPDX JSON document. It is retained for
+	// backwards compatibility with earlier releases that only emitted JSON.
 	FormatSPDX Format = "spdx"
+	// FormatSPDXJSON explicitly selects the SPDX JSON representation.
+	FormatSPDXJSON Format = "spdx-json"
+	// FormatSPDXTagValue emits an SPDX 2.3 tag-value document.
+	FormatSPDXTagValue Format = "spdx-tag-value"
 	// FormatCycloneDX emits a simplified CycloneDX 1.5 JSON document.
 	FormatCycloneDX Format = "cyclonedx"
 )
 
 // Options control SBOM generation behaviour.
 type Options struct {
-	Format      Format
-	ProductName string
+	Formats        []Format
+	ProductName    string
+	SigningKeyPath string
 }
 
 // Package describes a software package present in the firmware image.
@@ -53,17 +58,25 @@ type Document struct {
 type Generator struct {
 	logger *log.Logger
 	opts   Options
+	signer signer
 }
 
 // NewGenerator constructs a Generator, discarding log output when logger is nil.
-func NewGenerator(logger *log.Logger, opts Options) *Generator {
+func NewGenerator(logger *log.Logger, opts Options) (*Generator, error) {
 	if logger == nil {
 		logger = log.New(io.Discard, "sbom", log.LstdFlags)
 	}
-	if opts.Format == "" {
-		opts.Format = FormatSPDX
+	if len(opts.Formats) == 0 {
+		opts.Formats = []Format{FormatSPDX}
 	}
-	return &Generator{logger: logger, opts: opts}
+	if opts.SigningKeyPath != "" {
+		signer, err := newEd25519Signer(opts.SigningKeyPath)
+		if err != nil {
+			return nil, err
+		}
+		return &Generator{logger: logger, opts: opts, signer: signer}, nil
+	}
+	return &Generator{logger: logger, opts: opts}, nil
 }
 
 // Generate inspects the extraction root and produces an SBOM document. Package
@@ -90,7 +103,7 @@ func (g *Generator) Generate(ctx context.Context, root string, binaries []binary
 		name = filepath.Base(root)
 	}
 	return Document{
-		Format:     g.opts.Format,
+		Format:     g.primaryFormat(),
 		Created:    time.Now().UTC(),
 		Name:       name,
 		Packages:   packages,
@@ -98,16 +111,46 @@ func (g *Generator) Generate(ctx context.Context, root string, binaries []binary
 	}, nil
 }
 
-// WriteJSON serialises the SBOM document to the provided path.
+// WriteJSON serialises the SBOM document to the provided path using the SPDX
+// JSON format. It is retained for backwards compatibility with earlier
+// versions.
 func WriteJSON(doc Document, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(doc, "", "  ")
+	data, _, err := Encode(doc, FormatSPDXJSON)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return writeFile(path, data)
+}
+
+// Signer returns true when SBOM signing is enabled.
+func (g *Generator) Signer() bool {
+	return g.signer != nil
+}
+
+// Sign produces a detached signature for the supplied data when signing is
+// configured. When signing is disabled Sign returns nil without error.
+func (g *Generator) Sign(data []byte) ([]byte, error) {
+	if g.signer == nil {
+		return nil, nil
+	}
+	return g.signer.Sign(data)
+}
+
+func (g *Generator) primaryFormat() Format {
+	if len(g.opts.Formats) == 0 {
+		return FormatSPDX
+	}
+	if g.opts.Formats[0] == FormatSPDX {
+		return FormatSPDXJSON
+	}
+	return g.opts.Formats[0]
+}
+
+// Formats returns the configured output formats.
+func (g *Generator) Formats() []Format {
+	formats := make([]Format, len(g.opts.Formats))
+	copy(formats, g.opts.Formats)
+	return formats
 }
 
 func (g *Generator) detectPackages(ctx context.Context, root string) ([]Package, error) {

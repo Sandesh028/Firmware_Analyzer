@@ -123,3 +123,22 @@ func TestReportIncludesVulnerabilitiesAndPlugins(t *testing.T) {
 		t.Fatalf("expected plugin section")
 	}
 }
+
+func TestReportLoadJSON(t *testing.T) {
+	t.Parallel()
+
+	summary := report.Summary{Firmware: "sample.bin"}
+	gen := report.NewGenerator(nil)
+	outDir := t.TempDir()
+	paths, err := gen.WriteFiles(summary, outDir, report.Formats{JSON: true})
+	if err != nil {
+		t.Fatalf("write files: %v", err)
+	}
+	loaded, err := report.LoadJSON(paths.JSON)
+	if err != nil {
+		t.Fatalf("load json: %v", err)
+	}
+	if loaded.Firmware != "sample.bin" {
+		t.Fatalf("unexpected firmware %s", loaded.Firmware)
+	}
+}

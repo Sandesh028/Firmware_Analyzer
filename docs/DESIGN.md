@@ -19,10 +19,12 @@ matching) can be integrated without modifying the existing workflow heavily.
   expressions, Shannon entropy and optional allow-lists.
 - `pkg/binaryinspector` analyses ELF binaries for hardening settings such as
   RELRO, NX and PIE and renders Markdown tables for reports.
-- `pkg/vuln` hashes binaries and enriches them with CVE metadata from offline
-  databases.
-- `pkg/sbom` produces lightweight SPDX or CycloneDX JSON documents describing
-  detected packages and binaries.
+- `pkg/vuln` hashes binaries, enriches them with CVE metadata from offline
+  databases, and can query OSV/NVD feeds with caching and rate limiting.
+- `pkg/sbom` produces SPDX JSON, SPDX tag-value, or CycloneDX documents and can
+  sign artefacts with Ed25519 keys.
+- `pkg/diff` compares a fresh analysis summary against a baseline report and
+  renders Markdown/JSON change logs.
 - `pkg/plugin` executes external scripts that emit JSON findings, enabling
   custom organisational checks without modifying the core.
 - `pkg/report` composes module results into Markdown, HTML and JSON artefacts.
@@ -37,8 +39,9 @@ matching) can be integrated without modifying the existing workflow heavily.
    discovery, secret scanning and binary inspection operate on the workspace in
    parallel-friendly fashion (currently sequenced within the CLI for clarity).
 3. **Reporting** – The report generator aggregates module outputs into Markdown,
-   HTML and JSON documents, while SBOM and vulnerability data are persisted for
-   downstream pipelines.
+   HTML and JSON documents, while SBOM artefacts (optionally signed) and
+   vulnerability data are persisted. When a baseline report is provided the diff
+   package emits Markdown/JSON change logs alongside the primary reports.
 
 ## Testing Strategy
 

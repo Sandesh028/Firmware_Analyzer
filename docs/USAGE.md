@@ -6,7 +6,9 @@ image path:
 
 ```bash
 go run ./cmd/analyzer --fw firmware.tgz --out ./analysis \
-  --report-formats markdown,json --sbom-format spdx
+  --report-formats markdown,json \
+  --sbom-format spdx-json,spdx-tag-value --sbom-sign-key ./keys/ed25519.pem \
+  --enable-osv --enable-nvd --vuln-cache-dir ~/.cache/analyzer
 ```
 
 ## Flags
@@ -20,10 +22,21 @@ go run ./cmd/analyzer --fw firmware.tgz --out ./analysis \
 - `--vuln-db`: comma separated list of JSON files containing `sha256 -> CVE`
   mappings used to enrich binary inspection results. When omitted, the embedded
   `pkg/vuln/data/curated.json` dataset is applied automatically.
-- `--sbom-format`: choose `spdx`, `cyclonedx`, or `none` to control SBOM
-  generation.
+- `--sbom-format`: comma separated SBOM formats (`spdx-json`, `spdx-tag-value`,
+  `cyclonedx`, or `none`).
+- `--sbom-sign-key`: optional Ed25519 private key (PEM) used to sign SBOM
+  artefacts, emitting `.sig` companions.
+- `--baseline-report`: previous `report.json` used for diff generation.
+- `--diff-formats`: comma separated diff outputs (`markdown`, `json`).
 - `--plugin-dir`: directory containing executable scripts that emit JSON
   findings for custom checks.
+- `--enable-osv` / `--osv-endpoint`: enable OSV lookups and optionally override
+  the API endpoint.
+- `--enable-nvd` / `--nvd-endpoint` / `--nvd-api-key`: enable NVD lookups,
+  change the endpoint, and supply an API key when required.
+- `--vuln-cache-dir`: directory where online CVE responses are cached between
+  runs.
+- `--vuln-rate-limit`: maximum number of online CVE requests per minute.
 
 ## Output Structure
 
@@ -35,7 +48,9 @@ go run ./cmd/analyzer --fw firmware.tgz --out ./analysis \
         ├── report.md        # Markdown summary (if selected)
         ├── report.html      # HTML view (if selected)
         ├── report.json      # Structured JSON output (if selected)
-        └── sbom.spdx.json   # SBOM artefact (format depends on flag)
+        ├── sbom.spdx.json   # SBOM artefact(s) based on --sbom-format
+        ├── sbom.spdx.sig    # Ed25519 signature(s) when --sbom-sign-key is set
+        └── diff.md/json     # Optional diff reports when --baseline-report is supplied
 ```
 
 If `--out` is not provided the report directory is written inside the extracted
