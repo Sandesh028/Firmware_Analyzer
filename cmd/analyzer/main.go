@@ -13,6 +13,7 @@ import (
 
 	"firmwareanalyzer/pkg/binaryinspector"
 	"firmwareanalyzer/pkg/configparser"
+	"firmwareanalyzer/pkg/dashboard"
 	"firmwareanalyzer/pkg/diff"
 	"firmwareanalyzer/pkg/extractor"
 	"firmwareanalyzer/pkg/filesystem"
@@ -34,6 +35,7 @@ func main() {
 	pluginDirFlag := flag.String("plugin-dir", "", "directory containing analyzer plugins")
 	baselineReport := flag.String("baseline-report", "", "path to a baseline JSON report for diff generation")
 	diffFormatsFlag := flag.String("diff-formats", "markdown,json", "comma-separated diff report formats (markdown, json)")
+	historyDirFlag := flag.String("history-dir", "", "directory for storing analysis history for the dashboard")
 	enableOSV := flag.Bool("enable-osv", false, "query the OSV API for additional CVE data")
 	osvEndpoint := flag.String("osv-endpoint", "https://api.osv.dev/v1/query", "override OSV API endpoint")
 	enableNVD := flag.Bool("enable-nvd", false, "query the NVD API for additional CVE data")
@@ -229,6 +231,7 @@ func main() {
 		}
 	}
 
+	var diffPaths *diff.Paths
 	if *baselineReport != "" {
 		baseline, err := report.LoadJSON(*baselineReport)
 		if err != nil {
@@ -239,14 +242,32 @@ func main() {
 			log.Fatalf("invalid diff format: %v", err)
 		}
 		diffResult := diff.Compute(summary, baseline)
-		diffPaths, err := diff.WriteFiles(diffResult, outDir, diffFormats)
+		dp, err := diff.WriteFiles(diffResult, outDir, diffFormats)
 		if err != nil {
 			log.Fatalf("write diff report: %v", err)
 		}
-		logger.Printf("diff report written (md=%s json=%s)", diffPaths.Markdown, diffPaths.JSON)
+		diffPaths = &dp
+		logger.Printf("diff report written (md=%s json=%s)", dp.Markdown, dp.JSON)
 	}
 
-	logger.Printf("analysis complete in %s", time.Since(start).Round(time.Millisecond))
+	duration := time.Since(start)
+
+	historyDir := strings.TrimSpace(*historyDirFlag)
+	if historyDir == "" && outDir != "" {
+		historyDir = filepath.Join(outDir, "history")
+	}
+	if historyDir != "" {
+		store, err := dashboard.NewFileStore(historyDir, logger)
+		if err != nil {
+			logger.Printf("history store error: %v", err)
+		} else {
+			if _, err := store.Record(ctx, summary, paths, diffPaths, duration); err != nil {
+				logger.Printf("history record error: %v", err)
+			}
+		}
+	}
+
+	logger.Printf("analysis complete in %s", duration.Round(time.Millisecond))
 }
 
 func parseReportFormats(value string) (report.Formats, error) {

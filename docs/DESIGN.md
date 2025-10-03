@@ -28,6 +28,10 @@ matching) can be integrated without modifying the existing workflow heavily.
 - `pkg/plugin` executes external scripts that emit JSON findings, enabling
   custom organisational checks without modifying the core.
 - `pkg/report` composes module results into Markdown, HTML and JSON artefacts.
+- `pkg/dashboard` persists analysis history and serves a lightweight web UI for
+  browsing reports and diffing stored runs.
+- `pkg/scheduler` coordinates batched analyses using worker pools and optional
+  SSH targets while delegating execution to the analyzer CLI.
 - `pkg/utils` hosts shared helpers for map flattening, entropy calculations and
   heuristic utilities.
 
@@ -38,10 +42,14 @@ matching) can be integrated without modifying the existing workflow heavily.
 2. **Scanning** – Filesystem detection, configuration parsing, service
    discovery, secret scanning and binary inspection operate on the workspace in
    parallel-friendly fashion (currently sequenced within the CLI for clarity).
-3. **Reporting** – The report generator aggregates module outputs into Markdown,
-   HTML and JSON documents, while SBOM artefacts (optionally signed) and
-   vulnerability data are persisted. When a baseline report is provided the diff
-   package emits Markdown/JSON change logs alongside the primary reports.
+3. **Reporting & history** – The report generator aggregates module outputs into
+   Markdown, HTML and JSON documents, while SBOM artefacts (optionally signed)
+   and vulnerability data are persisted. When `--history-dir` is set the
+   dashboard store snapshots each run so the standalone `cmd/dashboard` server
+   can surface history and diff comparisons.
+4. **Batch execution** – Teams with larger firmware portfolios can describe job
+   plans and optional remote hosts for `cmd/scheduler`, which dispatches the CLI
+   with consistent flags while recording results into the shared history store.
 
 ## Testing Strategy
 

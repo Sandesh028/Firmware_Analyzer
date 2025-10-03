@@ -24,6 +24,10 @@ triage. The following milestones track planned enhancements:
 
 ## Long Term
 
-- Offer a web dashboard for browsing analysis history and diffing firmware
+- ✅ Offer a web dashboard for browsing analysis history and diffing firmware
   versions over time.
-- Introduce a scheduler for batch analysis and remote execution targets.
+- ✅ Introduce a scheduler for batch analysis and remote execution targets.
+- Expose authenticated REST APIs so the dashboard can power multi-user portals
+  and third-party automation.
+- Explore distributed workers that auto-scale via a queue backed by SQS, Redis,
+  or NATS for large firmware corpora.

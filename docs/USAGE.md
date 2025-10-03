@@ -28,6 +28,7 @@ go run ./cmd/analyzer --fw firmware.tgz --out ./analysis \
   artefacts, emitting `.sig` companions.
 - `--baseline-report`: previous `report.json` used for diff generation.
 - `--diff-formats`: comma separated diff outputs (`markdown`, `json`).
+- `--history-dir`: directory where run metadata is written for the dashboard.
 - `--plugin-dir`: directory containing executable scripts that emit JSON
   findings for custom checks.
 - `--enable-osv` / `--osv-endpoint`: enable OSV lookups and optionally override
@@ -44,13 +45,14 @@ go run ./cmd/analyzer --fw firmware.tgz --out ./analysis \
 <output>/
 ├── workspace/       # normalised extraction root
 │   ├── ...
-    └── report/
-        ├── report.md        # Markdown summary (if selected)
-        ├── report.html      # HTML view (if selected)
-        ├── report.json      # Structured JSON output (if selected)
-        ├── sbom.spdx.json   # SBOM artefact(s) based on --sbom-format
-        ├── sbom.spdx.sig    # Ed25519 signature(s) when --sbom-sign-key is set
-        └── diff.md/json     # Optional diff reports when --baseline-report is supplied
+└── report/
+    ├── report.md        # Markdown summary (if selected)
+    ├── report.html      # HTML view (if selected)
+    ├── report.json      # Structured JSON output (if selected)
+    ├── sbom.spdx.json   # SBOM artefact(s) based on --sbom-format
+    ├── sbom.spdx.sig    # Ed25519 signature(s) when --sbom-sign-key is set
+    └── diff.md/json     # Optional diff reports when --baseline-report is supplied
+└── history/            # Optional dashboard records when --history-dir is set
 ```
 
 If `--out` is not provided the report directory is written inside the extracted
@@ -78,3 +80,24 @@ go run ./cmd/vulndbupdate --source feeds/openwrt.json --source feeds/vendor.json
 
 The helper only allows HTTPS downloads by default. Use `--insecure-http` if a
 source lacks TLS, and provide additional `--source` flags as required.
+
+## Dashboard and scheduler helpers
+
+- **Dashboard**: enable history recording by setting `--history-dir` when running
+  the analyzer. Afterwards, start the dashboard service to browse prior runs and
+  trigger diff comparisons:
+
+  ```bash
+  ./dashboard --history-dir ./analysis/history --listen :8080
+  ```
+
+- **Scheduler**: batch multiple firmware analyses from a plan file and optional
+  remote hosts:
+
+  ```bash
+  ./scheduler --plan jobs.json --history-dir history --remote-host edge=user@edge-host
+  ```
+
+  Each job in the plan mirrors the analyzer flags (e.g., `report_formats`,
+  `extra_args`, `remote_host`) and results are recorded into the shared history
+  directory for dashboard consumption.

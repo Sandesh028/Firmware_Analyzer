@@ -22,6 +22,8 @@ CLI entrypoint.
 - Plugin execution framework for custom checks written in any language
 - Optional online CVE enrichment via OSV/NVD with caching and rate limiting
 - Firmware-to-firmware diff reports in Markdown and JSON for regression triage
+- Web dashboard for browsing stored analyses and on-demand diff comparisons
+- Batch scheduler capable of dispatching analyses locally or over SSH
 
 ## Prerequisites
 
@@ -54,10 +56,11 @@ cd Firmware_Analyzer
 go build ./cmd/analyzer
 ```
 
-To install the analyzer into your `$GOBIN` for repeated use:
+To install the analyzer into your `$GOBIN` for repeated use (including the
+dashboard, scheduler, and vulnerability feed helper), run:
 
 ```bash
-go install ./cmd/analyzer
+go install ./cmd/analyzer ./cmd/dashboard ./cmd/scheduler ./cmd/vulndbupdate
 ```
 
 Run the test suite to verify your environment:
@@ -99,6 +102,7 @@ created alongside the extracted firmware.
 - `--baseline-report` – path to a previous `report.json` used for diffing the
   current analysis against a baseline.
 - `--diff-formats` – comma separated diff artefact formats (`markdown`, `json`).
+- `--history-dir` – directory where run metadata is stored for the dashboard.
 - `--plugin-dir` – directory containing executable plugins. Plugins receive the
   analysis metadata as JSON on stdin together with `ANALYZER_ROOT` and
   `ANALYZER_METADATA_FORMAT=json` environment variables.
@@ -143,6 +147,61 @@ created alongside the extracted firmware.
   ```bash
   go run ./cmd/analyzer --fw tests/fixtures/sample.bin --report-formats markdown
   ```
+
+### Dashboard server
+
+- Persist history alongside reports by setting `--history-dir` (defaults to
+  `<out>/history` when `--out` is provided):
+
+  ```bash
+  ./analyzer --fw firmware.bin --out ./analysis --history-dir ./analysis/history
+  ```
+
+- Launch the dashboard to browse stored runs and request diffs on demand:
+
+  ```bash
+  ./dashboard --history-dir ./analysis/history --listen :8080
+  ```
+
+  Open `http://localhost:8080` in a browser to inspect the table of analyses,
+  drill into summaries, and diff any two runs.
+
+### Batch scheduler
+
+- Prepare a JSON plan with one or more jobs:
+
+  ```json
+  {
+    "jobs": [
+      {
+        "id": "release-rc1",
+        "firmware": "images/fw-rc1.bin",
+        "output_dir": "runs/rc1",
+        "history_dir": "history",
+        "report_formats": ["markdown", "json"]
+      },
+      {
+        "id": "release-rc2",
+        "firmware": "images/fw-rc2.bin",
+        "output_dir": "runs/rc2",
+        "remote_host": "edge-lab",
+        "extra_args": ["--enable-osv"]
+      }
+    ]
+  }
+  ```
+
+- Define optional remote hosts (SSH targets must have access to the firmware
+  path and analyzer binary):
+
+  ```bash
+  ./scheduler --plan jobs.json \
+    --history-dir history \
+    --remote-host edge-lab=user@edge-host,analyzer=/usr/local/bin/analyzer
+  ```
+
+  Scheduler progress is streamed to stdout, and results populate the shared
+  history directory for the dashboard.
 
 ### Curated vulnerability database
 
