@@ -79,6 +79,7 @@ type Metadata struct {
 	Secrets         []secrets.Finding        `json:"secrets,omitempty"`
 	Binaries        []binaryinspector.Result `json:"binaries,omitempty"`
 	Vulnerabilities []vuln.Finding           `json:"vulnerabilities,omitempty"`
+	PackageVulns    []vuln.PackageFinding    `json:"package_vulnerabilities,omitempty"`
 }
 
 // Run executes each executable file within the configured directory, treating

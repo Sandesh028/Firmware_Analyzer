@@ -9,10 +9,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"firmwareanalyzer/pkg/binaryinspector"
+	"firmwareanalyzer/pkg/sbom"
 	"firmwareanalyzer/pkg/vuln"
 )
 
@@ -205,6 +207,79 @@ func TestVulnerabilityOnlineLookupCachesResults(t *testing.T) {
 	}
 	if atomic.LoadInt32(&requests) != 1 {
 		t.Fatalf("expected cached result without extra HTTP calls, got %d", requests)
+	}
+}
+
+func TestEnrichPackagesUsesOfflineDatabase(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "packages.json")
+	db := map[string]any{
+		"packages": []map[string]any{{
+			"name":      "openssl",
+			"version":   "1.1.1",
+			"ecosystem": "linux",
+			"cves": []map[string]any{{
+				"id":       "CVE-2024-1234",
+				"severity": "high",
+			}},
+		}},
+	}
+	data, err := json.Marshal(db)
+	if err != nil {
+		t.Fatalf("marshal db: %v", err)
+	}
+	if err := os.WriteFile(dbPath, data, 0o644); err != nil {
+		t.Fatalf("write db: %v", err)
+	}
+
+	enricher := vuln.NewEnricher(nil, vuln.Options{DatabasePaths: []string{dbPath}, DisableEmbedded: true})
+	packages := []sbom.Package{{Name: "openssl", Version: "1.1.1", Supplier: "linux"}}
+	findings, err := enricher.EnrichPackages(context.Background(), packages)
+	if err != nil {
+		t.Fatalf("enrich packages: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected one finding, got %d", len(findings))
+	}
+	if len(findings[0].CVEs) != 1 || findings[0].CVEs[0].ID != "CVE-2024-1234" {
+		t.Fatalf("expected offline CVE match, got %#v", findings[0].CVEs)
+	}
+}
+
+func TestEnrichPackagesDisablesProviderOnPermanentError(t *testing.T) {
+	t.Parallel()
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	opts := vuln.Options{
+		DisableEmbedded: true,
+		OSV:             vuln.OnlineOptions{Enabled: true, Endpoint: server.URL},
+		HTTPClient:      server.Client(),
+	}
+	enricher := vuln.NewEnricher(nil, opts)
+	packages := []sbom.Package{{Name: "busybox", Version: "1.36.0"}}
+	findings, err := enricher.EnrichPackages(context.Background(), packages)
+	if err != nil {
+		t.Fatalf("enrich packages: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("expected a single request before provider disable, got %d", requests)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected single finding, got %d", len(findings))
+	}
+	if len(findings[0].CVEs) != 0 {
+		t.Fatalf("expected no CVEs on provider failure, got %#v", findings[0].CVEs)
+	}
+	if findings[0].Error == "" || !strings.Contains(findings[0].Error, "osv disabled") {
+		t.Fatalf("expected disable error, got %#v", findings[0])
 	}
 }
 

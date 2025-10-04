@@ -68,6 +68,11 @@ func main() {
 
 	analysisRoot := extraction.OutputDir
 
+	outDir := strings.TrimSpace(*outputDir)
+	if outDir == "" {
+		outDir = filepath.Join(extraction.OutputDir, "report")
+	}
+
 	fsDetector := filesystem.NewDetector(logger)
 	mounts, err := fsDetector.Detect(ctx, analysisRoot)
 	if err != nil {
@@ -122,9 +127,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid sbom format: %v", err)
 	}
-	var sbomGenerator *sbom.Generator
+
+	var sbomDoc *sbom.Document
+	var sbomPaths []string
+	var sbomSignatures []string
+	var packageInventory []sbom.Package
+
 	if len(sbomFormats) > 0 {
-		sbomGenerator, err = sbom.NewGenerator(logger, sbom.Options{
+		generator, err := sbom.NewGenerator(logger, sbom.Options{
 			Formats:        sbomFormats,
 			ProductName:    filepath.Base(*firmwarePath),
 			SigningKeyPath: *sbomSignKey,
@@ -132,6 +142,62 @@ func main() {
 		if err != nil {
 			log.Fatalf("sbom signer: %v", err)
 		}
+
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			logger.Printf("sbom output directory error: %v", err)
+		} else {
+			doc, err := generator.Generate(ctx, analysisRoot, binaries, extraction.Partitions)
+			if err != nil {
+				logger.Printf("sbom generation error: %v", err)
+			} else {
+				sbomDoc = &doc
+				packageInventory = doc.Packages
+				for _, format := range generator.Formats() {
+					data, ext, err := sbom.Encode(doc, format)
+					if err != nil {
+						logger.Printf("sbom encode (%s) error: %v", format, err)
+						continue
+					}
+					sbomPath := filepath.Join(outDir, fmt.Sprintf("sbom.%s", ext))
+					if err := os.WriteFile(sbomPath, data, 0o644); err != nil {
+						logger.Printf("sbom write error: %v", err)
+						continue
+					}
+					sbomPaths = append(sbomPaths, sbomPath)
+					sig, err := generator.Sign(data)
+					if err != nil {
+						logger.Printf("sbom signing error: %v", err)
+						continue
+					}
+					if len(sig) > 0 {
+						sigPath := sbomPath + ".sig"
+						encoded := base64.StdEncoding.EncodeToString(sig)
+						if err := os.WriteFile(sigPath, []byte(encoded), 0o600); err != nil {
+							logger.Printf("sbom signature write error: %v", err)
+						} else {
+							sbomSignatures = append(sbomSignatures, sigPath)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(packageInventory) == 0 {
+		if fallback, err := sbom.NewGenerator(logger, sbom.Options{Formats: []sbom.Format{sbom.FormatSPDXJSON}, ProductName: filepath.Base(*firmwarePath)}); err == nil {
+			if doc, genErr := fallback.Generate(ctx, analysisRoot, binaries, extraction.Partitions); genErr == nil {
+				packageInventory = doc.Packages
+			} else {
+				logger.Printf("package inventory error: %v", genErr)
+			}
+		} else {
+			logger.Printf("package inventory generator error: %v", err)
+		}
+	}
+
+	packageFindings, err := vulnEnricher.EnrichPackages(ctx, packageInventory)
+	if err != nil {
+		logger.Printf("package vulnerability enrichment error: %v", err)
 	}
 
 	pluginRunner := plugin.NewRunner(logger, plugin.Options{Directory: *pluginDirFlag})
@@ -145,21 +211,32 @@ func main() {
 		Secrets:         secretFindings,
 		Binaries:        binaries,
 		Vulnerabilities: vulnerabilityFindings,
+		PackageVulns:    packageFindings,
 	})
 	if err != nil {
 		logger.Printf("plugin execution error: %v", err)
 	}
 
 	summary := report.Summary{
-		Firmware:    *firmwarePath,
-		Extraction:  extraction,
-		FileSystems: mounts,
-		Configs:     configs,
-		Services:    services,
-		Secrets:     secretFindings,
-		Binaries:    binaries,
-		Vulnerable:  vulnerabilityFindings,
-		Plugins:     pluginResults,
+		Firmware:     *firmwarePath,
+		Extraction:   extraction,
+		FileSystems:  mounts,
+		Configs:      configs,
+		Services:     services,
+		Secrets:      secretFindings,
+		Binaries:     binaries,
+		Vulnerable:   vulnerabilityFindings,
+		PackageVulns: packageFindings,
+		Plugins:      pluginResults,
+	}
+
+	if sbomDoc != nil {
+		summary.SBOM = sbomDoc
+		summary.SBOMPath = firstPath(sbomPaths)
+		summary.SBOMPaths = append(summary.SBOMPaths, sbomPaths...)
+	}
+	if len(sbomSignatures) > 0 {
+		summary.SBOMSignatures = append(summary.SBOMSignatures, sbomSignatures...)
 	}
 
 	formats, err := parseReportFormats(*formatFlag)
@@ -168,53 +245,6 @@ func main() {
 	}
 
 	generator := report.NewGenerator(logger)
-	outDir := *outputDir
-	if outDir == "" {
-		outDir = filepath.Join(extraction.OutputDir, "report")
-	}
-
-	if sbomGenerator != nil {
-		if err := os.MkdirAll(outDir, 0o755); err != nil {
-			logger.Printf("sbom output directory error: %v", err)
-		} else {
-			doc, err := sbomGenerator.Generate(ctx, analysisRoot, binaries, extraction.Partitions)
-			if err != nil {
-				logger.Printf("sbom generation error: %v", err)
-			} else {
-				for _, format := range sbomGenerator.Formats() {
-					data, ext, err := sbom.Encode(doc, format)
-					if err != nil {
-						logger.Printf("sbom encode (%s) error: %v", format, err)
-						continue
-					}
-					sbomPath := filepath.Join(outDir, fmt.Sprintf("sbom.%s", ext))
-					if err := os.WriteFile(sbomPath, data, 0o644); err != nil {
-						logger.Printf("sbom write error: %v", err)
-						continue
-					}
-					summary.SBOM = &doc
-					summary.SBOMPaths = append(summary.SBOMPaths, sbomPath)
-					if summary.SBOMPath == "" {
-						summary.SBOMPath = sbomPath
-					}
-					sig, err := sbomGenerator.Sign(data)
-					if err != nil {
-						logger.Printf("sbom signing error: %v", err)
-						continue
-					}
-					if len(sig) > 0 {
-						sigPath := sbomPath + ".sig"
-						encoded := base64.StdEncoding.EncodeToString(sig)
-						if err := os.WriteFile(sigPath, []byte(encoded), 0o600); err != nil {
-							logger.Printf("sbom signature write error: %v", err)
-						} else {
-							summary.SBOMSignatures = append(summary.SBOMSignatures, sigPath)
-						}
-					}
-				}
-			}
-		}
-	}
 
 	paths, err := generator.WriteFiles(summary, outDir, formats)
 	if err != nil {
@@ -471,6 +501,13 @@ func collectArtefacts(reportPaths report.Paths, sbomPaths, sbomSignatures []stri
 		add(diffPaths.JSON)
 	}
 	return dedupeStrings(paths)
+}
+
+func firstPath(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
 }
 
 func transferArtefact(src, dstDir string) error {

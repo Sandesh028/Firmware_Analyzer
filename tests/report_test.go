@@ -39,6 +39,10 @@ func TestReportMarkdownContainsSections(t *testing.T) {
 			Notes:     "magic matched",
 		}},
 		Binaries: []binaryinspector.Result{{Path: "/bin/app"}},
+		PackageVulns: []vuln.PackageFinding{{
+			Package: sbom.Package{Name: "openssl", Version: "1.1.1"},
+			CVEs:    []vuln.CVE{{ID: "CVE-2024-1111", Severity: "high"}},
+		}},
 	}
 
 	gen := report.NewGenerator(nil)
@@ -54,6 +58,9 @@ func TestReportMarkdownContainsSections(t *testing.T) {
 	}
 	if !strings.Contains(md, "Compression") {
 		t.Fatalf("expected compression column: %s", md)
+	}
+	if !strings.Contains(md, "Package Vulnerabilities") {
+		t.Fatalf("expected package vulnerabilities section: %s", md)
 	}
 }
 
@@ -98,6 +105,52 @@ func TestReportWriteFilesHonoursFormats(t *testing.T) {
 	}
 	if filepath.Dir(paths.Markdown) != outDir {
 		t.Fatalf("markdown path outside output dir")
+	}
+}
+
+func TestReportWriteFilesProducesInteractiveHTML(t *testing.T) {
+	t.Parallel()
+
+	summary := report.Summary{
+		Firmware: "sample.bin",
+		Binaries: []binaryinspector.Result{{
+			Path:       "/bin/app",
+			NXEnabled:  true,
+			PIEEnabled: false,
+		}},
+		Vulnerable: []vuln.Finding{{
+			Path: "/bin/app",
+			Hash: "abc",
+			CVEs: []vuln.CVE{{ID: "CVE-2024-0001", Severity: "medium"}},
+		}},
+		PackageVulns: []vuln.PackageFinding{{
+			Package: sbom.Package{Name: "busybox", Version: "1.36.0", Supplier: "linux"},
+			CVEs:    []vuln.CVE{{ID: "CVE-2024-2222", Severity: "low"}},
+		}},
+	}
+
+	gen := report.NewGenerator(nil)
+	outDir := t.TempDir()
+	paths, err := gen.WriteFiles(summary, outDir, report.Formats{HTML: true, Markdown: true})
+	if err != nil {
+		t.Fatalf("write files: %v", err)
+	}
+	if paths.HTML == "" {
+		t.Fatalf("expected html path to be populated")
+	}
+	data, err := os.ReadFile(paths.HTML)
+	if err != nil {
+		t.Fatalf("read html: %v", err)
+	}
+	html := string(data)
+	if !strings.Contains(html, "<canvas id=\"binary-chart\"") {
+		t.Fatalf("expected binary chart canvas in html: %s", html)
+	}
+	if !strings.Contains(html, "summary-data") {
+		t.Fatalf("expected embedded summary json in html")
+	}
+	if !strings.Contains(html, "Package Vulnerabilities") {
+		t.Fatalf("expected package vulnerabilities panel")
 	}
 }
 

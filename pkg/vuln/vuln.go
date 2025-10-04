@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"firmwareanalyzer/pkg/binaryinspector"
+	"firmwareanalyzer/pkg/sbom"
 )
 
 // CVE represents a single vulnerability entry associated with a binary hash.
@@ -72,6 +73,13 @@ type Options struct {
 	NVD OnlineOptions
 }
 
+// PackageFinding links an SBOM package to CVEs discovered during enrichment.
+type PackageFinding struct {
+	Package sbom.Package `json:"package"`
+	CVEs    []CVE        `json:"cves,omitempty"`
+	Error   string       `json:"error,omitempty"`
+}
+
 // Enricher augments binary inspection results with CVE metadata sourced from
 // offline databases. Databases are expected to be JSON documents mapping
 // hexadecimal SHA-256 digests to arrays of CVE descriptors.
@@ -85,6 +93,9 @@ type Enricher struct {
 	lastRequest  time.Time
 	disableOSV   bool
 	disableNVD   bool
+	dbLoaded     bool
+	hashDB       map[string][]CVE
+	packageDB    map[string][]CVE
 }
 
 // NewEnricher builds an Enricher. When logger is nil log output is discarded.
@@ -119,8 +130,10 @@ func NewEnricher(logger *log.Logger, opts Options) *Enricher {
 // order of the input binaries. Errors hashing individual binaries are captured
 // within the Finding so that other binaries can still be processed.
 func (e *Enricher) Enrich(ctx context.Context, binaries []binaryinspector.Result) ([]Finding, error) {
-	db, err := e.loadDatabases()
-	if err != nil {
+	if len(binaries) == 0 {
+		return nil, nil
+	}
+	if err := e.ensureDatabases(); err != nil {
 		return nil, err
 	}
 
@@ -146,7 +159,7 @@ func (e *Enricher) Enrich(ctx context.Context, binaries []binaryinspector.Result
 			continue
 		}
 		finding.Hash = hash
-		finding.CVEs = db[hash]
+		finding.CVEs = e.hashDB[hash]
 		if e.onlineEnabled() {
 			online, lookupErr := e.lookupOnline(ctx, hash)
 			if lookupErr != nil {
@@ -161,13 +174,197 @@ func (e *Enricher) Enrich(ctx context.Context, binaries []binaryinspector.Result
 	return findings, nil
 }
 
-func (e *Enricher) loadDatabases() (map[string][]CVE, error) {
+// EnrichPackages augments SBOM package entries with CVE metadata gathered from
+// offline databases and optional online providers.
+func (e *Enricher) EnrichPackages(ctx context.Context, packages []sbom.Package) ([]PackageFinding, error) {
+	if len(packages) == 0 {
+		return nil, nil
+	}
+	if err := e.ensureDatabases(); err != nil {
+		return nil, err
+	}
+
+	findings := make([]PackageFinding, 0, len(packages))
+	for _, pkg := range packages {
+		if strings.TrimSpace(pkg.Name) == "" {
+			continue
+		}
+		finding := PackageFinding{Package: pkg}
+		offline := e.lookupPackageOffline(pkg)
+		if len(offline) > 0 {
+			finding.CVEs = mergeCVEs(finding.CVEs, offline)
+		}
+
+		if strings.TrimSpace(pkg.Version) == "" {
+			if len(finding.CVEs) == 0 {
+				finding.Error = "missing version information"
+			}
+			findings = append(findings, finding)
+			continue
+		}
+
+		if e.onlineEnabled() {
+			online, err := e.lookupPackageOnline(ctx, pkg)
+			if err != nil {
+				e.logger.Printf("package lookup %s: %v", pkg.Name, err)
+				if finding.Error == "" {
+					finding.Error = err.Error()
+				}
+			} else if len(online) > 0 {
+				finding.CVEs = mergeCVEs(finding.CVEs, online)
+			}
+		}
+
+		findings = append(findings, finding)
+	}
+	return findings, nil
+}
+
+func (e *Enricher) lookupPackageOffline(pkg sbom.Package) []CVE {
+	var combined []CVE
+	for _, key := range packageKeyCandidates(pkg) {
+		if key == "" {
+			continue
+		}
+		if cves, ok := e.packageDB[key]; ok {
+			combined = mergeCVEs(combined, cves)
+		}
+	}
+	return combined
+}
+
+func (e *Enricher) lookupPackageOnline(ctx context.Context, pkg sbom.Package) ([]CVE, error) {
+	cacheKey := packageCacheKey(pkg)
+	if cacheKey == "" {
+		return nil, errors.New("insufficient package metadata for lookup")
+	}
+	if entry, ok := e.fromCache(cacheKey); ok {
+		return entry.CVEs, nil
+	}
+
+	var combined []CVE
+	var errs []string
+
+	ecosystems := candidateEcosystems(pkg)
+	if e.opts.OSV.Enabled && !e.disableOSV {
+		for _, eco := range ecosystems {
+			cves, err := e.queryOSVPackage(ctx, pkg.Name, pkg.Version, eco)
+			if err != nil {
+				if e.disableOnPermanentError("osv", err) {
+					errs = append(errs, fmt.Sprintf("osv disabled: %v", err))
+					break
+				}
+				errs = append(errs, fmt.Sprintf("osv(%s): %v", eco, err))
+				continue
+			}
+			if len(cves) > 0 {
+				combined = mergeCVEs(combined, cves)
+			}
+		}
+	}
+
+	if e.opts.NVD.Enabled && !e.disableNVD {
+		cves, err := e.queryNVDPackage(ctx, pkg.Name, pkg.Version)
+		if err != nil {
+			if e.disableOnPermanentError("nvd", err) {
+				errs = append(errs, fmt.Sprintf("nvd disabled: %v", err))
+			} else {
+				errs = append(errs, fmt.Sprintf("nvd: %v", err))
+			}
+		} else if len(cves) > 0 {
+			combined = mergeCVEs(combined, cves)
+		}
+	}
+
+	e.storeCache(cacheKey, combined)
+	if len(errs) > 0 && len(combined) == 0 {
+		return combined, errors.New(strings.Join(errs, "; "))
+	}
+	return combined, nil
+}
+
+func packageCacheKey(pkg sbom.Package) string {
+	name := strings.ToLower(strings.TrimSpace(pkg.Name))
+	version := strings.TrimSpace(pkg.Version)
+	if name == "" || version == "" {
+		return ""
+	}
+	return fmt.Sprintf("pkg|%s@%s", name, version)
+}
+
+func packageKeyCandidates(pkg sbom.Package) []string {
+	name := strings.TrimSpace(pkg.Name)
+	version := strings.TrimSpace(pkg.Version)
+	if name == "" || version == "" {
+		return nil
+	}
+	ecosystems := candidateEcosystems(pkg)
+	ecosystems = append([]string{""}, ecosystems...)
+	seen := make(map[string]struct{})
+	var keys []string
+	for _, eco := range ecosystems {
+		key := packageKey(name, version, eco)
+		norm := normalizePackageKey(key)
+		if norm == "" {
+			continue
+		}
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+		keys = append(keys, norm)
+	}
+	return keys
+}
+
+func candidateEcosystems(pkg sbom.Package) []string {
+	base := []string{}
+	if supplier := strings.ToLower(strings.TrimSpace(pkg.Supplier)); supplier != "" {
+		base = append(base, supplier)
+	}
+	base = append(base, "linux", "debian", "generic")
+	seen := make(map[string]struct{})
+	var ecos []string
+	for _, eco := range base {
+		eco = strings.ToLower(strings.TrimSpace(eco))
+		if eco == "" {
+			continue
+		}
+		if _, ok := seen[eco]; ok {
+			continue
+		}
+		seen[eco] = struct{}{}
+		ecos = append(ecos, eco)
+	}
+	return ecos
+}
+
+func formatEcosystem(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	switch strings.ToLower(trimmed) {
+	case "debian":
+		return "Debian"
+	case "linux", "generic", "openwrt":
+		return "Linux"
+	default:
+		lower := strings.ToLower(trimmed)
+		if len(lower) == 0 {
+			return ""
+		}
+		return strings.ToUpper(lower[:1]) + lower[1:]
+	}
+}
+
+func (e *Enricher) loadDatabases() (map[string][]CVE, map[string][]CVE, error) {
 	var sources []map[string][]CVE
 
 	if !e.opts.DisableEmbedded && len(embeddedCuratedDatabase) > 0 {
 		entries, err := ParseDatabase(embeddedCuratedDatabase)
 		if err != nil {
-			return nil, fmt.Errorf("parse embedded database: %w", err)
+			return nil, nil, fmt.Errorf("parse embedded database: %w", err)
 		}
 		sources = append(sources, entries)
 	}
@@ -195,9 +392,37 @@ func (e *Enricher) loadDatabases() (map[string][]CVE, error) {
 	}
 
 	if len(sources) == 0 && (e.opts.DisableEmbedded || len(embeddedCuratedDatabase) == 0) {
-		return make(map[string][]CVE), nil
+		return make(map[string][]CVE), make(map[string][]CVE), nil
 	}
-	return Merge(sources...), nil
+	hashes, packages := e.splitDatabases(Merge(sources...))
+	return hashes, packages, nil
+}
+
+func (e *Enricher) ensureDatabases() error {
+	if e.dbLoaded {
+		return nil
+	}
+	hashes, packages, err := e.loadDatabases()
+	if err != nil {
+		return err
+	}
+	e.hashDB = hashes
+	e.packageDB = packages
+	e.dbLoaded = true
+	return nil
+}
+
+func (e *Enricher) splitDatabases(db map[string][]CVE) (map[string][]CVE, map[string][]CVE) {
+	hashes := make(map[string][]CVE)
+	packages := make(map[string][]CVE)
+	for key, cves := range db {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), "pkg:") {
+			packages[normalizePackageKey(key)] = cves
+			continue
+		}
+		hashes[normalizeHash(key)] = cves
+	}
+	return hashes, packages
 }
 
 func hashFile(path string) (string, error) {
@@ -224,14 +449,27 @@ func ParseDatabase(data []byte) (map[string][]CVE, error) {
 			SHA256 string `json:"sha256"`
 			CVEs   []CVE  `json:"cves"`
 		} `json:"artifacts"`
+		Packages []struct {
+			Name      string `json:"name"`
+			Version   string `json:"version"`
+			Ecosystem string `json:"ecosystem"`
+			CVEs      []CVE  `json:"cves"`
+		} `json:"packages"`
 	}
-	if err := json.Unmarshal(data, &wrapper); err == nil && len(wrapper.Artifacts) > 0 {
+	if err := json.Unmarshal(data, &wrapper); err == nil && (len(wrapper.Artifacts) > 0 || len(wrapper.Packages) > 0) {
 		out := make(map[string][]CVE)
 		for _, art := range wrapper.Artifacts {
 			if art.SHA256 == "" {
 				continue
 			}
 			out[normalizeHash(art.SHA256)] = append(out[normalizeHash(art.SHA256)], art.CVEs...)
+		}
+		for _, pkg := range wrapper.Packages {
+			key := packageKey(pkg.Name, pkg.Version, pkg.Ecosystem)
+			if key == "" {
+				continue
+			}
+			out[key] = append(out[key], pkg.CVEs...)
 		}
 		return out, nil
 	}
@@ -255,6 +493,47 @@ func normalizeHash(value string) string {
 	return cleaned
 }
 
+func packageKey(name, version, ecosystem string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	version = strings.TrimSpace(version)
+	ecosystem = strings.ToLower(strings.TrimSpace(ecosystem))
+	if name == "" || version == "" {
+		return ""
+	}
+	return fmt.Sprintf("pkg:%s:%s@%s", ecosystem, name, version)
+}
+
+func normalizePackageKey(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasPrefix(trimmed, "pkg:") {
+		trimmed = "pkg::" + trimmed
+	} else {
+		trimmed = strings.TrimPrefix(trimmed, "pkg:")
+	}
+	parts := strings.SplitN(trimmed, ":", 2)
+	var ecosystem string
+	var remainder string
+	if len(parts) == 2 {
+		ecosystem = strings.ToLower(strings.TrimSpace(parts[0]))
+		remainder = parts[1]
+	} else {
+		remainder = parts[0]
+	}
+	tokens := strings.SplitN(remainder, "@", 2)
+	if len(tokens) != 2 {
+		return ""
+	}
+	name := strings.ToLower(strings.TrimSpace(tokens[0]))
+	version := strings.TrimSpace(tokens[1])
+	if name == "" || version == "" {
+		return ""
+	}
+	return fmt.Sprintf("pkg:%s:%s@%s", ecosystem, name, version)
+}
+
 // Merge combines one or more vulnerability databases into a single map keyed
 // by SHA-256 hash. CVE entries are deduplicated by ID, metadata is merged, and
 // references are normalised.
@@ -265,6 +544,14 @@ func Merge(databases ...map[string][]CVE) map[string][]CVE {
 			continue
 		}
 		for hash, cves := range db {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(hash)), "pkg:") {
+				normalized := normalizePackageKey(hash)
+				if normalized == "" {
+					continue
+				}
+				combined[normalized] = mergeCVEs(combined[normalized], cves)
+				continue
+			}
 			normalized := normalizeHash(hash)
 			if normalized == "" {
 				continue
@@ -415,14 +702,14 @@ func (e *Enricher) lookupOnline(ctx context.Context, hash string) ([]CVE, error)
 	return combined, nil
 }
 
-func (e *Enricher) fromCache(hash string) (cacheEntry, bool) {
-	if entry, ok := e.cache[hash]; ok {
+func (e *Enricher) fromCache(key string) (cacheEntry, bool) {
+	if entry, ok := e.cache[key]; ok {
 		return entry, true
 	}
 	if e.cacheDir == "" {
 		return cacheEntry{}, false
 	}
-	path := e.cacheFile(hash)
+	path := e.cacheFile(key)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return cacheEntry{}, false
@@ -431,13 +718,13 @@ func (e *Enricher) fromCache(hash string) (cacheEntry, bool) {
 	if err := json.Unmarshal(data, &entry); err != nil {
 		return cacheEntry{}, false
 	}
-	e.cache[hash] = entry
+	e.cache[key] = entry
 	return entry, true
 }
 
-func (e *Enricher) storeCache(hash string, cves []CVE) {
+func (e *Enricher) storeCache(key string, cves []CVE) {
 	entry := cacheEntry{CVEs: cves}
-	e.cache[hash] = entry
+	e.cache[key] = entry
 	if e.cacheDir == "" {
 		return
 	}
@@ -448,11 +735,12 @@ func (e *Enricher) storeCache(hash string, cves []CVE) {
 	if err := os.MkdirAll(e.cacheDir, 0o755); err != nil {
 		return
 	}
-	_ = os.WriteFile(e.cacheFile(hash), data, 0o644)
+	_ = os.WriteFile(e.cacheFile(key), data, 0o644)
 }
 
-func (e *Enricher) cacheFile(hash string) string {
-	return filepath.Join(e.cacheDir, fmt.Sprintf("%s.json", hash))
+func (e *Enricher) cacheFile(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return filepath.Join(e.cacheDir, fmt.Sprintf("%s.json", hex.EncodeToString(sum[:])))
 }
 
 func (e *Enricher) throttle(ctx context.Context) error {
@@ -495,41 +783,47 @@ func (e *Enricher) queryOSV(ctx context.Context, hash string) ([]CVE, error) {
 	if resp.StatusCode >= 400 {
 		return nil, &providerError{provider: "osv", status: resp.StatusCode, message: fmt.Sprintf("http %s", resp.Status)}
 	}
-	var parsed struct {
-		Vulns []struct {
-			ID       string `json:"id"`
-			Summary  string `json:"summary"`
-			Details  string `json:"details"`
-			Severity []struct {
-				Type  string `json:"type"`
-				Score string `json:"score"`
-			} `json:"severity"`
-			References []struct {
-				URL string `json:"url"`
-			} `json:"references"`
-		} `json:"vulns"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	return decodeOSV(resp.Body)
+}
+
+func (e *Enricher) queryOSVPackage(ctx context.Context, name, version, ecosystem string) ([]CVE, error) {
+	if err := e.throttle(ctx); err != nil {
 		return nil, err
 	}
-	var out []CVE
-	for _, vuln := range parsed.Vulns {
-		cve := CVE{ID: vuln.ID}
-		if cve.Description == "" {
-			cve.Description = strings.TrimSpace(vuln.Summary)
-		}
-		if cve.Description == "" {
-			cve.Description = strings.TrimSpace(vuln.Details)
-		}
-		cve.Severity = pickOSVSeverity(vuln.Severity)
-		for _, ref := range vuln.References {
-			if ref.URL != "" {
-				cve.References = append(cve.References, ref.URL)
-			}
-		}
-		out = append(out, cve)
+	name = strings.TrimSpace(name)
+	version = strings.TrimSpace(version)
+	if name == "" || version == "" {
+		return nil, nil
 	}
-	return out, nil
+	pkg := map[string]string{"name": name}
+	if eco := formatEcosystem(ecosystem); eco != "" {
+		pkg["ecosystem"] = eco
+	}
+	payload := map[string]any{
+		"package": pkg,
+		"version": version,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.opts.OSV.Endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		return nil, nil
+	}
+	if resp.StatusCode >= 400 {
+		return nil, &providerError{provider: "osv", status: resp.StatusCode, message: fmt.Sprintf("http %s", resp.Status)}
+	}
+	return decodeOSV(resp.Body)
 }
 
 func (e *Enricher) queryNVD(ctx context.Context, hash string) ([]CVE, error) {
@@ -558,6 +852,92 @@ func (e *Enricher) queryNVD(ctx context.Context, hash string) ([]CVE, error) {
 	if resp.StatusCode >= 400 {
 		return nil, &providerError{provider: "nvd", status: resp.StatusCode, message: fmt.Sprintf("http %s", resp.Status)}
 	}
+	return decodeNVDResponse(resp.Body)
+}
+
+func (e *Enricher) queryNVDPackage(ctx context.Context, name, version string) ([]CVE, error) {
+	if err := e.throttle(ctx); err != nil {
+		return nil, err
+	}
+	name = strings.TrimSpace(name)
+	version = strings.TrimSpace(version)
+	if name == "" || version == "" {
+		return nil, nil
+	}
+	endpoint, err := url.Parse(e.opts.NVD.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	q := endpoint.Query()
+	keyword := strings.TrimSpace(fmt.Sprintf("%s %s", name, version))
+	if existing := strings.TrimSpace(q.Get("keywordSearch")); existing != "" {
+		keyword = existing + " " + keyword
+	}
+	q.Set("keywordSearch", keyword)
+	if q.Get("resultsPerPage") == "" {
+		q.Set("resultsPerPage", "100")
+	}
+	endpoint.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(e.opts.NVD.APIKey) != "" {
+		req.Header.Set("X-Api-Key", strings.TrimSpace(e.opts.NVD.APIKey))
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		return nil, nil
+	}
+	if resp.StatusCode >= 400 {
+		return nil, &providerError{provider: "nvd", status: resp.StatusCode, message: fmt.Sprintf("http %s", resp.Status)}
+	}
+	return decodeNVDResponse(resp.Body)
+}
+
+func decodeOSV(r io.Reader) ([]CVE, error) {
+	var parsed struct {
+		Vulns []struct {
+			ID       string `json:"id"`
+			Summary  string `json:"summary"`
+			Details  string `json:"details"`
+			Severity []struct {
+				Type  string `json:"type"`
+				Score string `json:"score"`
+			} `json:"severity"`
+			References []struct {
+				URL string `json:"url"`
+			} `json:"references"`
+		} `json:"vulns"`
+	}
+	if err := json.NewDecoder(r).Decode(&parsed); err != nil {
+		return nil, err
+	}
+	var out []CVE
+	for _, vuln := range parsed.Vulns {
+		cve := CVE{ID: vuln.ID}
+		if cve.Description == "" {
+			cve.Description = strings.TrimSpace(vuln.Summary)
+		}
+		if cve.Description == "" {
+			cve.Description = strings.TrimSpace(vuln.Details)
+		}
+		cve.Severity = pickOSVSeverity(vuln.Severity)
+		for _, ref := range vuln.References {
+			if ref.URL != "" {
+				cve.References = append(cve.References, ref.URL)
+			}
+		}
+		out = append(out, cve)
+	}
+	return out, nil
+}
+
+func decodeNVDResponse(r io.Reader) ([]CVE, error) {
 	var parsed struct {
 		Vulnerabilities []struct {
 			Cve struct {
@@ -588,7 +968,7 @@ func (e *Enricher) queryNVD(ctx context.Context, hash string) ([]CVE, error) {
 			} `json:"cve"`
 		} `json:"vulnerabilities"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := json.NewDecoder(r).Decode(&parsed); err != nil {
 		return nil, err
 	}
 	var out []CVE
