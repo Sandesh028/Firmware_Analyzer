@@ -146,11 +146,46 @@ func TestReportWriteFilesProducesInteractiveHTML(t *testing.T) {
 	if !strings.Contains(html, "<canvas id=\"binary-chart\"") {
 		t.Fatalf("expected binary chart canvas in html: %s", html)
 	}
+	if !strings.Contains(html, "id=\"partition-chart\"") {
+		t.Fatalf("expected partition insight chart")
+	}
+	if !strings.Contains(html, "id=\"venn-chart\"") {
+		t.Fatalf("expected venn diagram container")
+	}
+	if !strings.Contains(html, "id=\"pdf-button\"") {
+		t.Fatalf("expected pdf download button")
+	}
 	if !strings.Contains(html, "summary-data") {
 		t.Fatalf("expected embedded summary json in html")
 	}
 	if !strings.Contains(html, "Package Vulnerabilities") {
 		t.Fatalf("expected package vulnerabilities panel")
+	}
+}
+
+func TestInteractiveHTMLHandlesEmptyDataGracefully(t *testing.T) {
+	t.Parallel()
+
+	summary := report.Summary{Firmware: "sample.bin"}
+	gen := report.NewGenerator(nil)
+	html, err := gen.HTML(summary)
+	if err != nil {
+		t.Fatalf("html rendering failed: %v", err)
+	}
+	checks := []string{
+		"No partitions discovered.",
+		"No secrets detected.",
+		"No CVEs recorded.",
+		"No ELF binaries analysed.",
+		"Not enough overlapping artefacts to render a Venn diagram.",
+	}
+	for _, phrase := range checks {
+		if !strings.Contains(html, phrase) {
+			t.Fatalf("expected placeholder %q in html", phrase)
+		}
+	}
+	if strings.Contains(html, "<script src=\"http") {
+		t.Fatalf("expected inline scripts without external network references")
 	}
 }
 
@@ -177,6 +212,23 @@ func TestReportIncludesVulnerabilitiesAndPlugins(t *testing.T) {
 	}
 	if !strings.Contains(md, "Plugin Findings") {
 		t.Fatalf("expected plugin section")
+	}
+}
+
+func TestInteractiveHTMLEscapesClosingScriptTags(t *testing.T) {
+	t.Parallel()
+
+	summary := report.Summary{Firmware: "</script>firmware"}
+	gen := report.NewGenerator(nil)
+	html, err := gen.HTML(summary)
+	if err != nil {
+		t.Fatalf("html rendering failed: %v", err)
+	}
+	if strings.Contains(html, "</script>firmware") {
+		t.Fatalf("expected firmware string to be escaped in summary json")
+	}
+	if !strings.Contains(html, "\\u003c/script") {
+		t.Fatalf("expected escaped closing script tag in summary json")
 	}
 }
 

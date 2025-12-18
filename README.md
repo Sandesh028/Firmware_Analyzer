@@ -16,6 +16,7 @@ CLI entrypoint.
 - Service detection for SysV/BUSYBOX init scripts and systemd units
 - Regex and entropy based secrets scanning with allow-list support
 - Binary hardening analysis with Markdown, HTML and JSON reporting
+- Interactive offline HTML report featuring charts, venn diagrams, and one-click PDF export
 - CVE enrichment for inspected binaries using offline hash databases
 - SBOM generation (SPDX JSON, SPDX tag-value, or CycloneDX) with optional
   Ed25519 signing for downstream tooling
@@ -147,6 +148,20 @@ created alongside the extracted firmware.
   ```bash
   go run ./cmd/analyzer --fw tests/fixtures/sample.bin --report-formats markdown
   ```
+
+### Interactive report experience
+
+- Every run mirrors the generated artefacts into an easily shareable
+  `FA_<firmware>` directory created alongside the working directory so you can
+  hand results to teammates without hunting for paths.
+- Open the HTML report (`report.html`) to explore overview cards, interactive
+  charts (partition composition, secret rule distribution, severity breakdown),
+  a configuration/service venn diagram, and searchable tables for each module.
+- Use the built-in **Download PDF** button to export a polished snapshot of the
+  dashboard for audits—even in offline environments thanks to bundled
+  JavaScript libraries.
+- Markdown and JSON downloads remain accessible via the header for quick
+  automation or ticket attachments.
 
 ### Dashboard server
 

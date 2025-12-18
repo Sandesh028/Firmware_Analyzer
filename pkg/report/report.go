@@ -408,12 +408,22 @@ func (g *Generator) buildHTML(summary Summary, md string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Prevent </script> from prematurely terminating the inline JSON payload.
+	summaryData = bytes.ReplaceAll(summaryData, []byte("</"), []byte("<\\/"))
 	payload := struct {
 		SummaryJSON  template.JS
 		MarkdownHTML template.HTML
+		ChartJS      template.JS
+		D3JS         template.JS
+		VennJS       template.JS
+		HTML2PDFJS   template.JS
 	}{
 		SummaryJSON:  template.JS(string(summaryData)),
 		MarkdownHTML: markdownHTML,
+		ChartJS:      template.JS(chartJS()),
+		D3JS:         template.JS(d3JS()),
+		VennJS:       template.JS(vennJS()),
+		HTML2PDFJS:   template.JS(html2pdfJS()),
 	}
 	tmpl, err := template.New("interactive").Parse(interactiveHTMLTemplate)
 	if err != nil {
@@ -715,23 +725,27 @@ const interactiveHTMLTemplate = `<!DOCTYPE html>
 <meta charset="utf-8">
 <title>Drone Firmware Analyzer Report</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root { color-scheme: light; }
 body { font-family: 'Inter', 'Segoe UI', sans-serif; margin: 0; background: #f4f6fb; color: #1f2933; }
 a { color: #1d4ed8; text-decoration: none; }
 a:hover { text-decoration: underline; }
-header { background: linear-gradient(135deg, #4338ca, #6366f1); color: #fff; padding: 48px 32px 96px 32px; text-align: center; }
-header h1 { margin: 0; font-size: 2.4rem; font-weight: 700; }
-header p { margin-top: 10px; font-size: 1.05rem; opacity: 0.9; }
+header { background: linear-gradient(135deg, #4338ca, #6366f1); color: #fff; padding: 48px 32px 96px 32px; }
+.header-content { max-width: 1200px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 24px; }
+header h1 { margin: 0; font-size: 2.6rem; font-weight: 700; }
+header p { margin-top: 10px; font-size: 1.05rem; opacity: 0.92; }
 header p.meta { margin-top: 18px; font-size: 0.95rem; opacity: 0.85; }
-header code { background: rgba(255,255,255,0.15); padding: 4px 8px; border-radius: 6px; color: #fff; }
-main { max-width: 1200px; margin: -60px auto 48px; padding: 0 24px 80px; }
+header code { background: rgba(255,255,255,0.18); padding: 4px 8px; border-radius: 6px; color: #fff; }
+.header-actions { display: flex; gap: 12px; align-items: center; }
+.action-button { border: none; background: #fbbf24; color: #1f2933; padding: 10px 18px; border-radius: 999px; font-weight: 600; cursor: pointer; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.25); transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.action-button:hover { transform: translateY(-1px); box-shadow: 0 16px 32px rgba(15, 23, 42, 0.25); }
+.action-button:disabled { cursor: wait; opacity: 0.7; box-shadow: none; }
+.action-link { border: 1px solid rgba(255,255,255,0.6); padding: 10px 18px; border-radius: 999px; font-weight: 600; color: #fff; background: rgba(255,255,255,0.08); }
+.action-link:hover { background: rgba(255,255,255,0.16); }
+main { max-width: 1200px; margin: -70px auto 48px; padding: 0 24px 96px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 32px; }
 .card { background: #fff; border-radius: 16px; padding: 18px 20px; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12); display: flex; flex-direction: column; gap: 6px; }
-.card .value { font-size: 1.85rem; font-weight: 700; color: #111827; }
+.card .value { font-size: 1.9rem; font-weight: 700; color: #111827; }
 .card .label { font-size: 0.92rem; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; }
 .card .hint { font-size: 0.82rem; color: #475569; }
 .panel { background: #fff; border-radius: 18px; padding: 24px 24px 30px; margin-bottom: 28px; box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08); }
@@ -762,31 +776,83 @@ main { max-width: 1200px; margin: -60px auto 48px; padding: 0 24px 80px; }
 .artefact-list span.label { font-weight: 600; color: #1e1b4b; }
 .artefact-list code { background: #f1f5f9; padding: 0.25rem 0.45rem; border-radius: 6px; color: #334155; }
 .markdown-body { background: #f8fafc; padding: 1.1rem; border-radius: 12px; border: 1px solid #e2e8f0; overflow-x: auto; }
-#binary-chart { max-width: 100%; margin-top: 12px; }
+#binary-chart { max-width: 100%; margin-top: 12px; min-height: 200px; }
 #binary-chart-empty { margin-top: 8px; }
+.insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; margin-top: 18px; }
+.insight { background: linear-gradient(180deg, rgba(79, 70, 229, 0.08), rgba(129, 140, 248, 0.12)); border-radius: 16px; padding: 16px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.5); display: flex; flex-direction: column; }
+.insight h3 { margin: 0 0 10px 0; font-size: 1.05rem; color: #312e81; }
+.insight canvas { background: #fff; border-radius: 12px; padding: 10px; box-shadow: 0 12px 24px rgba(99, 102, 241, 0.12); }
+#venn-chart { width: 100%; min-height: 320px; margin-top: 16px; }
+.venn-area path { fill-opacity: 0.4; stroke-opacity: 0.7; stroke-width: 2px; }
+.venn-area text { fill: #1e1b4b; font-size: 0.85rem; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; font-size: 0.85rem; color: #475569; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend span::before { content: ''; display: inline-block; width: 12px; height: 12px; border-radius: 999px; background: currentColor; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
 details summary { cursor: pointer; font-weight: 600; }
 .hidden { display: none; }
 @media (max-width: 720px) {
-  header { padding: 36px 20px 80px; }
+  header { padding: 36px 20px 86px; }
   header h1 { font-size: 2rem; }
-  main { margin: -72px auto 32px; padding: 0 16px 60px; }
+  main { margin: -82px auto 32px; padding: 0 16px 72px; }
   .panel { padding: 20px; }
+  .header-actions { width: 100%; justify-content: flex-start; }
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script>{{.ChartJS}}</script>
+<script>{{.D3JS}}</script>
+<script>{{.VennJS}}</script>
+<script>{{.HTML2PDFJS}}</script>
 </head>
 <body>
 <header>
-  <h1>Drone Firmware Analyzer</h1>
-  <p>Interactive overview of the firmware inspection results.</p>
-  <p class="meta" id="firmware-path"></p>
+  <div class="header-content">
+    <div>
+      <h1>Drone Firmware Analyzer</h1>
+      <p>Interactive overview of the firmware inspection results with drill-down tables and visual analytics.</p>
+      <p class="meta" id="firmware-path"></p>
+    </div>
+    <div class="header-actions">
+      <button id="pdf-button" class="action-button" type="button">Download PDF</button>
+      <a class="action-link" id="markdown-download" href="report.md" download>Markdown</a>
+      <a class="action-link" id="json-download" href="report.json" download>JSON</a>
+    </div>
+  </div>
 </header>
 <main>
   <section class="cards" id="overview-cards"></section>
+  <section class="panel insights">
+    <h2>Insights &amp; Statistics</h2>
+    <p class="description">Visualise how protections, secrets, and vulnerabilities intersect so you can focus on the riskiest artefacts first.</p>
+    <div class="insight-grid">
+      <div class="insight">
+        <h3>Partition Composition</h3>
+        <canvas id="partition-chart" height="200"></canvas>
+        <p class="empty hidden" id="partition-chart-empty">No partitions discovered.</p>
+      </div>
+      <div class="insight">
+        <h3>Secret Rule Distribution</h3>
+        <canvas id="secret-chart" height="200"></canvas>
+        <p class="empty hidden" id="secret-chart-empty">No secrets detected.</p>
+      </div>
+      <div class="insight">
+        <h3>Vulnerability Severity</h3>
+        <canvas id="severity-chart" height="200"></canvas>
+        <p class="empty hidden" id="severity-chart-empty">No CVEs recorded.</p>
+      </div>
+    </div>
+  </section>
   <section class="panel" id="binary-panel">
     <h2>Binary Protections Overview</h2>
-    <canvas id="binary-chart" height="120"></canvas>
+    <p class="description">Compare exploit mitigations across analysed ELF binaries.</p>
+    <canvas id="binary-chart" height="160"></canvas>
     <p class="empty hidden" id="binary-chart-empty">No ELF binaries analysed.</p>
+  </section>
+  <section class="panel" id="relationship-panel">
+    <h2>Configuration &amp; Service Relationship Map</h2>
+    <p class="description">Shows directories that simultaneously host configuration files, secrets, or service definitions.</p>
+    <div id="venn-chart"></div>
+    <p class="empty hidden" id="venn-empty">Not enough overlapping artefacts to render a Venn diagram.</p>
   </section>
   <section class="panel">
     <h2>Extraction</h2>
@@ -828,7 +894,7 @@ details summary { cursor: pointer; font-weight: 600; }
     <h2>SBOM &amp; Artefacts</h2>
     <p class="description" id="sbom-meta"></p>
     <div id="artefact-list"></div>
-    <p class="description" style="margin-top:14px; font-size:0.85rem;">Markdown and JSON reports are stored alongside this HTML file.</p>
+    <p class="description" style="margin-top:14px; font-size:0.85rem;">All report formats are stored next to this HTML file for offline archiving.</p>
   </section>
   <section class="panel">
     <h2>Raw Markdown Report</h2>
@@ -865,17 +931,27 @@ details summary { cursor: pointer; font-weight: 600; }
     return '<span class="badge ' + cls + '">' + escapeHTML(sev.toUpperCase()) + '</span>';
   };
   const stripHTML = (value) => String(value || '').replace(/<[^>]*>/g, ' ');
+  const getDir = (path) => {
+    if (!path) return '';
+    const normalised = String(path).replace(/\\+/g, '/');
+    if (!normalised.includes('/')) return normalised;
+    return normalised.split('/').slice(0, -1).join('/') || normalised;
+  };
   const firmwareMeta = document.getElementById('firmware-path');
   if (firmwareMeta) {
     firmwareMeta.innerHTML = summary.Firmware ? 'Firmware image: <code>' + escapeHTML(summary.Firmware) + '</code>' : 'Firmware path not recorded.';
   }
   const computeBinaryStats = (binaries) => {
-    let nxEnabled = 0, nxDisabled = 0, pieEnabled = 0, pieDisabled = 0;
+    let nxEnabled = 0, nxDisabled = 0, pieEnabled = 0, pieDisabled = 0, relroFull = 0, relroPartial = 0, relroNone = 0;
     binaries.forEach((bin) => {
       if (bin && bin.NXEnabled) { nxEnabled++; } else { nxDisabled++; }
       if (bin && bin.PIEEnabled) { pieEnabled++; } else { pieDisabled++; }
+      const relro = String(bin && bin.RELRO || '').toLowerCase();
+      if (relro === 'full') relroFull++;
+      else if (relro === 'partial') relroPartial++;
+      else relroNone++;
     });
-    return { nxEnabled, nxDisabled, pieEnabled, pieDisabled, total: binaries.length };
+    return { nxEnabled, nxDisabled, pieEnabled, pieDisabled, relroFull, relroPartial, relroNone, total: binaries.length };
   };
   const renderCards = (summary) => {
     const container = document.getElementById('overview-cards');
@@ -886,6 +962,8 @@ details summary { cursor: pointer; font-weight: 600; }
     const secrets = ensureArray(summary.Secrets);
     const secretEntropy = secrets.reduce((max, entry) => Math.max(max, typeof entry.Entropy === 'number' ? entry.Entropy : 0), 0);
     const binaryStats = computeBinaryStats(binaries);
+    const vulnTotal = ensureArray(summary.Vulnerable).reduce((count, item) => count + ensureArray(item.CVEs).length, 0);
+    const pkgVulnTotal = ensureArray(summary.PackageVulns).reduce((count, item) => count + ensureArray(item.CVEs).length, 0);
     const metrics = [
       { label: 'Partitions', value: partitions.length, hint: summary.Extraction && summary.Extraction.OutputDir ? 'Workspace ' + summary.Extraction.OutputDir : 'Extraction completed' },
       { label: 'Filesystems', value: ensureArray(summary.FileSystems).length },
@@ -893,8 +971,8 @@ details summary { cursor: pointer; font-weight: 600; }
       { label: 'Services', value: ensureArray(summary.Services).length },
       { label: 'Secrets', value: secrets.length, hint: secretEntropy > 0 ? 'Max entropy ' + secretEntropy.toFixed(2) : undefined },
       { label: 'Binaries', value: binaries.length, hint: binaryStats.nxDisabled > 0 ? binaryStats.nxDisabled + ' without NX' : undefined },
-      { label: 'Binary CVEs', value: ensureArray(summary.Vulnerable).filter((item) => ensureArray(item.CVEs).length > 0).length },
-      { label: 'Package CVEs', value: ensureArray(summary.PackageVulns).filter((item) => ensureArray(item.CVEs).length > 0).length },
+      { label: 'Binary CVEs', value: vulnTotal },
+      { label: 'Package CVEs', value: pkgVulnTotal },
       { label: 'Plugins', value: ensureArray(summary.Plugins).length },
       { label: 'SBOM artefacts', value: (ensureArray(summary.SBOMPaths).length || (summary.SBOM ? 1 : 0)) }
     ];
@@ -937,19 +1015,167 @@ details summary { cursor: pointer; font-weight: 600; }
     new window.Chart(chartEl.getContext('2d'), {
       type: 'bar',
       data: {
-        labels: ['NX', 'PIE'],
+        labels: ['NX Enabled', 'NX Disabled', 'PIE Enabled', 'PIE Disabled', 'RELRO Full', 'RELRO Partial', 'RELRO None'],
         datasets: [
-          { label: 'Enabled', data: [stats.nxEnabled, stats.pieEnabled], backgroundColor: '#10b981' },
-          { label: 'Disabled', data: [stats.nxDisabled, stats.pieDisabled], backgroundColor: '#ef4444' }
+          { label: 'Count', data: [stats.nxEnabled, stats.nxDisabled, stats.pieEnabled, stats.pieDisabled, stats.relroFull, stats.relroPartial, stats.relroNone], backgroundColor: ['#16a34a', '#ef4444', '#0ea5e9', '#f97316', '#6366f1', '#fbbf24', '#9ca3af'] }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom' } },
+        plugins: { legend: { display: false } },
         scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
       }
     });
+  };
+  const renderPartitionChart = (partitions) => {
+    const chartEl = document.getElementById('partition-chart');
+    const emptyEl = document.getElementById('partition-chart-empty');
+    if (!chartEl || !emptyEl) { return; }
+    if (!partitions.length || typeof window.Chart === 'undefined') {
+      chartEl.classList.add('hidden');
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+    const sorted = [...partitions].filter(Boolean).sort((a, b) => (b.Size || 0) - (a.Size || 0));
+    const top = sorted.slice(0, 6);
+    const otherSize = sorted.slice(6).reduce((sum, item) => sum + (item.Size || 0), 0);
+    if (otherSize > 0) {
+      top.push({ Name: 'Other', Size: otherSize });
+    }
+    if (!top.length) {
+      chartEl.classList.add('hidden');
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+    emptyEl.classList.add('hidden');
+    new window.Chart(chartEl.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: top.map((item) => item.Name || 'Partition'),
+        datasets: [{ data: top.map((item) => item.Size || 0), backgroundColor: ['#6366f1', '#22d3ee', '#a855f7', '#f97316', '#14b8a6', '#facc15', '#60a5fa'] }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom' } }
+      }
+    });
+  };
+  const renderSecretChart = (secrets) => {
+    const chartEl = document.getElementById('secret-chart');
+    const emptyEl = document.getElementById('secret-chart-empty');
+    if (!chartEl || !emptyEl) { return; }
+    if (!secrets.length || typeof window.Chart === 'undefined') {
+      chartEl.classList.add('hidden');
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+    const counts = new Map();
+    secrets.forEach((sec) => {
+      const rule = (sec && sec.Rule) ? String(sec.Rule) : 'Unknown';
+      counts.set(rule, (counts.get(rule) || 0) + 1);
+    });
+    const entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+    const top = entries.slice(0, 8);
+    emptyEl.classList.add('hidden');
+    new window.Chart(chartEl.getContext('2d'), {
+      type: 'polarArea',
+      data: {
+        labels: top.map((entry) => entry[0]),
+        datasets: [{ data: top.map((entry) => entry[1]), backgroundColor: ['#f472b6', '#38bdf8', '#facc15', '#94a3b8', '#f97316', '#a855f7', '#4ade80', '#f87171'] }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom' } }
+      }
+    });
+  };
+  const renderSeverityChart = (binaryFindings, packageFindings) => {
+    const chartEl = document.getElementById('severity-chart');
+    const emptyEl = document.getElementById('severity-chart-empty');
+    if (!chartEl || !emptyEl) { return; }
+    const severities = ['critical', 'high', 'medium', 'low', 'info'];
+    const counts = new Map(severities.map((sev) => [sev, 0]));
+    const collect = (findings) => {
+      ensureArray(findings).forEach((finding) => {
+        ensureArray(finding && finding.CVEs).forEach((cve) => {
+          const sev = String(cve && cve.Severity || '').toLowerCase();
+          if (counts.has(sev)) {
+            counts.set(sev, counts.get(sev) + 1);
+          } else if (sev) {
+            counts.set(sev, (counts.get(sev) || 0) + 1);
+          }
+        });
+      });
+    };
+    collect(binaryFindings);
+    collect(packageFindings);
+    const total = Array.from(counts.values()).reduce((sum, value) => sum + value, 0);
+    if (!total || typeof window.Chart === 'undefined') {
+      chartEl.classList.add('hidden');
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+    emptyEl.classList.add('hidden');
+    const labels = Array.from(counts.keys());
+    const data = labels.map((label) => counts.get(label));
+    new window.Chart(chartEl.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: labels.map((label) => label.toUpperCase()),
+        datasets: [{ data, backgroundColor: ['#ef4444', '#f97316', '#facc15', '#34d399', '#60a5fa'] }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom' } }
+      }
+    });
+  };
+  const renderVenn = (configs, services, secrets) => {
+    const container = document.getElementById('venn-chart');
+    const empty = document.getElementById('venn-empty');
+    if (!container || !empty) { return; }
+    container.innerHTML = '';
+    if (typeof window.venn === 'undefined' || typeof window.d3 === 'undefined') {
+      empty.textContent = 'Interactive relationship map unavailable offline.';
+      empty.classList.remove('hidden');
+      return;
+    }
+    const configDirs = new Set(ensureArray(configs).map((cfg) => getDir(cfg && cfg.File)));
+    const serviceDirs = new Set(ensureArray(services).map((svc) => getDir(svc && svc.Path)));
+    const secretDirs = new Set(ensureArray(secrets).map((sec) => getDir(sec && sec.File)));
+    const size = (set) => Array.from(set).filter(Boolean).length;
+    const intersection = (sets) => {
+      if (!sets.length) return new Set();
+      const [first, ...rest] = sets;
+      return new Set(Array.from(first).filter((item) => item && rest.every((set) => set.has(item))));
+    };
+    const configsOnly = size(configDirs);
+    const servicesOnly = size(serviceDirs);
+    const secretsOnly = size(secretDirs);
+    const configService = intersection([configDirs, serviceDirs]);
+    const configSecrets = intersection([configDirs, secretDirs]);
+    const serviceSecrets = intersection([serviceDirs, secretDirs]);
+    const allThree = intersection([configDirs, serviceDirs, secretDirs]);
+    const vennData = [];
+    if (configsOnly) vennData.push({ sets: ['Configs'], size: configsOnly });
+    if (servicesOnly) vennData.push({ sets: ['Services'], size: servicesOnly });
+    if (secretsOnly) vennData.push({ sets: ['Secrets'], size: secretsOnly });
+    if (configService.size) vennData.push({ sets: ['Configs', 'Services'], size: configService.size });
+    if (configSecrets.size) vennData.push({ sets: ['Configs', 'Secrets'], size: configSecrets.size });
+    if (serviceSecrets.size) vennData.push({ sets: ['Services', 'Secrets'], size: serviceSecrets.size });
+    if (allThree.size) vennData.push({ sets: ['Configs', 'Services', 'Secrets'], size: allThree.size });
+    if (!vennData.length) {
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+    const diagram = window.venn.VennDiagram().width(container.clientWidth).height(320);
+    window.d3.select(container).datum(vennData).call(diagram);
+    window.d3.select(container).selectAll('text').style('font-family', 'Inter, sans-serif');
   };
   const renderTable = (containerId, columns, rows) => {
     const container = document.getElementById(containerId);
@@ -1019,69 +1245,38 @@ details summary { cursor: pointer; font-weight: 600; }
         const extra = refs.length > 3 ? ' +' + (refs.length - 3) + ' more' : '';
         refHtml = '<span class="refs">' + display + extra + '</span>';
       }
-      return '<li><strong>' + id + '</strong> ' + badge + description + refHtml + '</li>';
+      return '<li><span class="badge badge-info">' + id + '</span> ' + badge + description + refHtml + '</li>';
     });
     return '<ul class="cve-list">' + items.join('') + '</ul>';
   };
-  const renderArtefacts = (containerId, summary) => {
-    const container = document.getElementById(containerId);
-    if (!container) { return; }
-    container.innerHTML = '';
-    const items = [];
-    ensureArray(summary.SBOMPaths).forEach((path) => items.push({ label: 'SBOM', value: path }));
-    ensureArray(summary.SBOMSignatures).forEach((path) => items.push({ label: 'Signature', value: path }));
-    if (!items.length) {
-      container.innerHTML = '<p class="empty">No SBOM artefacts generated. Enable --sbom-format to export SPDX or CycloneDX documents.</p>';
-      return;
-    }
-    const list = document.createElement('ul');
-    list.className = 'artefact-list';
-    items.forEach((item) => {
-      const li = document.createElement('li');
-      const label = document.createElement('span');
-      label.className = 'label';
-      label.textContent = item.label;
-      const value = document.createElement('code');
-      value.textContent = item.value;
-      li.appendChild(label);
-      li.appendChild(value);
-      list.appendChild(li);
-    });
-    container.appendChild(list);
-  };
-  const renderSBOMMeta = (summary) => {
-    const meta = document.getElementById('sbom-meta');
-    if (!meta) { return; }
-    if (summary.SBOM && Array.isArray(summary.SBOM.Packages)) {
-      meta.textContent = 'Generated ' + text(summary.SBOM.Format).toUpperCase() + ' document with ' + formatCount(summary.SBOM.Packages.length) + ' packages.';
-    } else {
-      meta.textContent = 'SBOM generation was not enabled for this run.';
-    }
-  };
-  const extractionRows = ensureArray(summary.Extraction && summary.Extraction.Partitions).map((part) => ({
-    artifact: '<code>' + escapeHTML(part.Name || '-') + '</code>',
-    type: text(part.Type),
-    size: part.Size ? formatBytes(part.Size) : '-',
-    offset: part.Offset && part.Offset > 0 ? formatCount(part.Offset) : '-',
-    entropy: typeof part.Entropy === 'number' && part.Entropy > 0 ? part.Entropy.toFixed(2) : '-',
-    notes: escapeHTML(part.Notes || '-'),
-    search: [part.Name, part.Type, part.Notes].join(' ')
+  const partitions = ensureArray(summary.Extraction && summary.Extraction.Partitions).map((part) => ({
+    name: part && part.Name ? escapeHTML(part.Name) : 'Artifact',
+    type: part && part.Type ? escapeHTML(part.Type) : '-',
+    size: formatBytes(part && part.Size),
+    offset: part && part.Offset && part.Offset > 0 ? formatCount(part.Offset) : '-',
+    entropy: (part && part.Entropy) ? part.Entropy.toFixed(2) : '-',
+    compression: escapeHTML(part && part.Compression ? part.Compression : '-'),
+    notes: escapeHTML(part && part.Notes ? part.Notes : '-'),
+    path: '<code>' + escapeHTML(part && part.Path ? part.Path : '-') + '</code>',
+    search: [part && part.Name, part && part.Path, part && part.Type].join(' ')
   }));
   renderTable('extraction-table', [
-    { label: 'Artifact', field: 'artifact', isHTML: true, searchField: 'search' },
+    { label: 'Artifact', field: 'name', isHTML: true, searchField: 'search' },
     { label: 'Type', field: 'type' },
     { label: 'Size', field: 'size' },
     { label: 'Offset', field: 'offset' },
     { label: 'Entropy', field: 'entropy' },
-    { label: 'Notes', field: 'notes', isHTML: true }
-  ], extractionRows);
+    { label: 'Compression', field: 'compression' },
+    { label: 'Notes', field: 'notes', isHTML: true },
+    { label: 'Location', field: 'path', isHTML: true }
+  ], partitions);
   const filesystemRows = ensureArray(summary.FileSystems).map((fs) => ({
-    image: '<code>' + escapeHTML(fs.ImagePath || '-') + '</code>',
-    type: text(fs.Type),
-    size: fs.Size ? formatBytes(fs.Size) : '-',
-    offset: fs.Offset && fs.Offset > 0 ? formatCount(fs.Offset) : '-',
-    notes: escapeHTML(fs.Notes || '-'),
-    search: [fs.ImagePath, fs.Type, fs.Notes].join(' ')
+    image: '<code>' + escapeHTML(fs && fs.ImagePath ? fs.ImagePath : '-') + '</code>',
+    type: text(fs && fs.Type),
+    size: formatBytes(fs && fs.Size),
+    offset: fs && fs.Offset && fs.Offset > 0 ? formatCount(fs.Offset) : '-',
+    notes: escapeHTML(fs && fs.Notes ? fs.Notes : '-'),
+    search: [fs && fs.ImagePath, fs && fs.Type, fs && fs.Notes].join(' ')
   }));
   renderTable('filesystem-table', [
     { label: 'Image', field: 'image', isHTML: true, searchField: 'search' },
@@ -1091,16 +1286,16 @@ details summary { cursor: pointer; font-weight: 600; }
     { label: 'Notes', field: 'notes', isHTML: true }
   ], filesystemRows);
   const configRows = ensureArray(summary.Configs).map((cfg) => {
-    const params = ensureArray(cfg.Params);
+    const params = ensureArray(cfg && cfg.Params);
     const credentials = params.filter((p) => p && p.Credential).length;
     const example = params.length ? '<code>' + escapeHTML(params[0].Key || '') + '=' + escapeHTML(params[0].Value || '') + '</code>' : '<span class="muted">-</span>';
     return {
-      file: '<code>' + escapeHTML(cfg.File || '-') + '</code>',
-      format: text((cfg.Format || '').toUpperCase()),
+      file: '<code>' + escapeHTML(cfg && cfg.File || '-') + '</code>',
+      format: text((cfg && cfg.Format || '').toUpperCase()),
       entries: formatCount(params.length),
       credentials: formatCount(credentials),
       example,
-      search: [cfg.File, cfg.Format].join(' ')
+      search: [cfg && cfg.File, cfg && cfg.Format].join(' ')
     };
   });
   renderTable('config-table', [
@@ -1111,11 +1306,11 @@ details summary { cursor: pointer; font-weight: 600; }
     { label: 'Example', field: 'example', isHTML: true }
   ], configRows);
   const serviceRows = ensureArray(summary.Services).map((svc) => ({
-    name: '<code>' + escapeHTML(svc.Name || '-') + '</code>',
-    type: text(svc.Type),
-    path: '<code>' + escapeHTML(svc.Path || '-') + '</code>',
-    provides: ensureArray(svc.Provides).length ? escapeHTML(ensureArray(svc.Provides).join(', ')) : '<span class="muted">-</span>',
-    search: [svc.Name, svc.Type, svc.Path, ensureArray(svc.Provides).join(' ')].join(' ')
+    name: '<code>' + escapeHTML(svc && svc.Name || '-') + '</code>',
+    type: text(svc && svc.Type),
+    path: '<code>' + escapeHTML(svc && svc.Path || '-') + '</code>',
+    provides: ensureArray(svc && svc.Provides).length ? escapeHTML(ensureArray(svc.Provides).join(', ')) : '<span class="muted">-</span>',
+    search: [svc && svc.Name, svc && svc.Type, svc && svc.Path, ensureArray(svc && svc.Provides).join(' ')].join(' ')
   }));
   renderTable('service-table', [
     { label: 'Name', field: 'name', isHTML: true, searchField: 'search' },
@@ -1124,12 +1319,12 @@ details summary { cursor: pointer; font-weight: 600; }
     { label: 'Provides', field: 'provides', isHTML: true }
   ], serviceRows);
   const secretRows = ensureArray(summary.Secrets).map((sec) => ({
-    file: '<code>' + escapeHTML(sec.File || '-') + '</code>',
-    line: formatCount(typeof sec.Line === 'number' ? sec.Line : 0),
-    rule: text(sec.Rule),
-    match: '<code>' + escapeHTML(sec.Match || '-') + '</code>',
-    entropy: typeof sec.Entropy === 'number' ? sec.Entropy.toFixed(2) : '-',
-    search: [sec.File, sec.Rule, sec.Match].join(' ')
+    file: '<code>' + escapeHTML(sec && sec.File || '-') + '</code>',
+    line: formatCount(typeof (sec && sec.Line) === 'number' ? sec.Line : 0),
+    rule: text(sec && sec.Rule),
+    match: '<code>' + escapeHTML(sec && sec.Match || '-') + '</code>',
+    entropy: typeof (sec && sec.Entropy) === 'number' ? sec.Entropy.toFixed(2) : '-',
+    search: [sec && sec.File, sec && sec.Rule, sec && sec.Match].join(' ')
   }));
   renderTable('secret-table', [
     { label: 'File', field: 'file', isHTML: true, searchField: 'search' },
@@ -1139,15 +1334,15 @@ details summary { cursor: pointer; font-weight: 600; }
     { label: 'Entropy', field: 'entropy' }
   ], secretRows);
   const binaryRows = ensureArray(summary.Binaries).map((bin) => ({
-    path: '<code>' + escapeHTML(bin.Path || '-') + '</code>',
-    type: text(bin.Type),
-    arch: text(bin.Architecture),
-    relro: text((bin.RELRO || '').toUpperCase()),
+    path: '<code>' + escapeHTML(bin && bin.Path || '-') + '</code>',
+    type: text(bin && bin.Type),
+    arch: text(bin && bin.Architecture),
+    relro: text((bin && bin.RELRO || '').toUpperCase()),
     nx: boolBadge(!!(bin && bin.NXEnabled)),
     pie: boolBadge(!!(bin && bin.PIEEnabled)),
     stripped: boolBadge(!!(bin && bin.Stripped)),
     interp: bin && bin.Interpreter ? '<code>' + escapeHTML(bin.Interpreter) + '</code>' : '<span class="muted">-</span>',
-    search: [bin.Path, bin.Type, bin.Architecture, bin.Interpreter].join(' ')
+    search: [bin && bin.Path, bin && bin.Type, bin && bin.Architecture, bin && bin.Interpreter].join(' ')
   }));
   renderTable('binary-table', [
     { label: 'Path', field: 'path', isHTML: true, searchField: 'search' },
@@ -1160,12 +1355,12 @@ details summary { cursor: pointer; font-weight: 600; }
     { label: 'Interpreter', field: 'interp', isHTML: true }
   ], binaryRows);
   const vulnRows = ensureArray(summary.Vulnerable).map((vul) => ({
-    path: '<code>' + escapeHTML(vul.Path || '-') + '</code>',
+    path: '<code>' + escapeHTML(vul && vul.Path || '-') + '</code>',
     hash: vul && vul.Hash ? '<code>' + escapeHTML(vul.Hash) + '</code>' : '<span class="muted">-</span>',
     cves: formatCVEList(vul && vul.CVEs),
-    cveText: ensureArray(vul && vul.CVEs).map((cve) => [cve.ID, cve.Severity, ensureArray(cve.References).join(' ')].join(' ')).join(' '),
+    cveText: ensureArray(vul && vul.CVEs).map((cve) => [cve && cve.ID, cve && cve.Severity, ensureArray(cve && cve.References).join(' ')].join(' ')).join(' '),
     error: vul && vul.Error ? escapeHTML(vul.Error) : '<span class="muted">-</span>',
-    search: [vul.Path, vul.Hash, vul.Error].join(' ')
+    search: [vul && vul.Path, vul && vul.Hash, vul && vul.Error].join(' ')
   }));
   renderTable('vulnerability-table', [
     { label: 'Path', field: 'path', isHTML: true, searchField: 'search' },
@@ -1176,13 +1371,13 @@ details summary { cursor: pointer; font-weight: 600; }
   const packageRows = ensureArray(summary.PackageVulns).map((finding) => {
     const pkg = finding && finding.Package ? finding.Package : {};
     return {
-      pkg: '<code>' + escapeHTML(pkg.Name || '-') + '</code>',
-      version: text(pkg.Version),
-      source: text(pkg.Supplier),
+      pkg: '<code>' + escapeHTML(pkg && pkg.Name || '-') + '</code>',
+      version: text(pkg && pkg.Version),
+      source: text(pkg && pkg.Supplier),
       cves: formatCVEList(finding && finding.CVEs),
-      cveText: ensureArray(finding && finding.CVEs).map((cve) => [cve.ID, cve.Severity, ensureArray(cve.References).join(' ')].join(' ')).join(' '),
+      cveText: ensureArray(finding && finding.CVEs).map((cve) => [cve && cve.ID, cve && cve.Severity, ensureArray(cve && cve.References).join(' ')].join(' ')).join(' '),
       notes: finding && finding.Error ? escapeHTML(finding.Error) : '<span class="muted">-</span>',
-      search: [pkg.Name, pkg.Version, pkg.Supplier, finding && finding.Error].join(' ')
+      search: [pkg && pkg.Name, pkg && pkg.Version, pkg && pkg.Supplier, finding && finding.Error].join(' ')
     };
   });
   renderTable('package-table', [
@@ -1193,26 +1388,79 @@ details summary { cursor: pointer; font-weight: 600; }
     { label: 'Notes', field: 'notes', isHTML: true }
   ], packageRows);
   const pluginRows = ensureArray(summary.Plugins).map((plugin) => {
-    const findings = ensureArray(plugin.Findings);
+    const findings = ensureArray(plugin && plugin.Findings);
     const example = findings.length ? escapeHTML((findings[0].Severity ? findings[0].Severity.toUpperCase() + ': ' : '') + (findings[0].Summary || '')) : '-';
     return {
-      plugin: text(plugin.Plugin),
+      plugin: text(plugin && plugin.Plugin),
       findings: formatCount(findings.length),
-      example: example,
-      error: plugin && plugin.Error ? '<span class="badge badge-warn">' + escapeHTML(plugin.Error) + '</span>' : '<span class="muted">-</span>',
-      search: [plugin.Plugin, plugin.Error, example].join(' ')
+      example,
+      search: [plugin && plugin.Plugin, findings.map((f) => f.Summary).join(' ')].join(' ')
     };
   });
   renderTable('plugin-table', [
     { label: 'Plugin', field: 'plugin', searchField: 'search' },
     { label: 'Findings', field: 'findings' },
-    { label: 'Example', field: 'example', isHTML: true },
-    { label: 'Error', field: 'error', isHTML: true }
+    { label: 'Example', field: 'example' }
   ], pluginRows);
+  const artefactContainer = document.getElementById('artefact-list');
+  if (artefactContainer) {
+    artefactContainer.innerHTML = '';
+    const list = document.createElement('ul');
+    list.className = 'artefact-list';
+    const addArtefact = (label, value) => {
+      const item = document.createElement('li');
+      const spanLabel = document.createElement('span');
+      spanLabel.className = 'label';
+      spanLabel.textContent = label;
+      const spanValue = document.createElement('span');
+      spanValue.innerHTML = '<code>' + escapeHTML(value || '-') + '</code>';
+      item.appendChild(spanLabel);
+      item.appendChild(spanValue);
+      list.appendChild(item);
+    };
+    ensureArray(summary.SBOMPaths).forEach((path) => addArtefact('SBOM', path));
+    if (summary.SBOM && summary.SBOM.Format) {
+      addArtefact('SBOM format', summary.SBOM.Format);
+    }
+    ensureArray(summary.SBOMSignatures).forEach((sig) => addArtefact('SBOM signature', sig));
+    addArtefact('Markdown report', 'report.md');
+    addArtefact('JSON report', 'report.json');
+    artefactContainer.appendChild(list);
+  }
+  const sbomMeta = document.getElementById('sbom-meta');
+  if (sbomMeta) {
+    const sbomCount = ensureArray(summary.SBOMPaths).length || (summary.SBOM ? 1 : 0);
+    sbomMeta.textContent = sbomCount ? 'SBOM artefacts generated: ' + sbomCount + '. Use them for dependency tracking or SBOM ingestion pipelines.' : 'No SBOM artefacts were produced.';
+  }
   renderCards(summary);
   renderBinaryChart(ensureArray(summary.Binaries));
-  renderArtefacts('artefact-list', summary);
-  renderSBOMMeta(summary);
+  renderPartitionChart(ensureArray(summary.Extraction && summary.Extraction.Partitions));
+  renderSecretChart(ensureArray(summary.Secrets));
+  renderSeverityChart(ensureArray(summary.Vulnerable), ensureArray(summary.PackageVulns));
+  renderVenn(ensureArray(summary.Configs), ensureArray(summary.Services), ensureArray(summary.Secrets));
+  const pdfButton = document.getElementById('pdf-button');
+  if (pdfButton) {
+    const firmwareName = (summary.Firmware || 'firmware').split(/[\\/]/).pop().replace(/[^a-z0-9\-_.]+/gi, '_');
+    pdfButton.addEventListener('click', () => {
+      if (typeof window.html2pdf === 'undefined') {
+        pdfButton.textContent = 'PDF not available offline';
+        pdfButton.disabled = true;
+        return;
+      }
+      pdfButton.disabled = true;
+      const originalText = pdfButton.textContent;
+      pdfButton.textContent = 'Preparing PDF...';
+      window.html2pdf().set({ filename: firmwareName + '_report.pdf', margin: 10, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(document.body).save().catch((err) => {
+        console.error('PDF export failed', err);
+        pdfButton.textContent = 'PDF failed';
+      }).finally(() => {
+        setTimeout(() => {
+          pdfButton.disabled = false;
+          pdfButton.textContent = originalText;
+        }, 800);
+      });
+    });
+  }
 })();
 </script>
 </body>
